@@ -8,6 +8,10 @@ REPO_URL="https://github.com/qazqwerty617/os.git"
 
 echo "🚀 Deploying via Git to $SERVER_IP..."
 
+# 0. Upload secrets (.env) manually since it's not in git
+echo "🔑 Uploading .env file..."
+scp .env root@$SERVER_IP:$REMOTE_DIR/.env
+
 # 1. Update VPS code
 echo "📡 Pulling latest code on server..."
 ssh root@$SERVER_IP "
