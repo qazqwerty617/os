@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  pump-monitor:
+    build: .
+    container_name: mexc_pump_monitor
+    restart: always
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    volumes:
+      - ./journal_data:/app/journal_data
+      - ./learning_data:/app/learning_data
+      - ./.env:/app/.env
+      - ./pump_monitor.db:/app/pump_monitor.db
+      - ./performance.db:/app/performance.db
+    environment:
+      - PYTHONUNBUFFERED=1
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared_tunnel
+    restart: unless-stopped
+    command: tunnel --url http://pump-monitor:8081
+    depends_on:
+      - pump-monitor
