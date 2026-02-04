@@ -123,13 +123,15 @@ class EventBus:
     """
     High-performance async event bus
     Supports filtering, priority queuing, and async processing
+    Optimized: 3 priority levels (high=1, medium=2, low=3)
     """
     
-    def __init__(self, max_queue_size: int = 10000):
-        # Priority queue for events
-        self._queues: Dict[int, asyncio.Queue] = {
-            i: asyncio.Queue(maxsize=max_queue_size // 10)
-            for i in range(1, 11)
+    def __init__(self, max_queue_size: int = 5000):
+        # 3 priority queues instead of 10 for efficiency
+        self._queues = {
+            1: asyncio.Queue(maxsize=max_queue_size // 3),  # High priority
+            2: asyncio.Queue(maxsize=max_queue_size // 3),  # Medium priority  
+            3: asyncio.Queue(maxsize=max_queue_size // 3),  # Low priority
         }
         
         # Subscribers
@@ -243,9 +245,11 @@ class EventBus:
             source=source,
             priority=priority
         )
+        # Normalize priority to 3 levels
+        normalized_priority = 1 if priority <= 2 else (2 if priority <= 5 else 3)
         
         # Add to priority queue
-        queue = self._queues.get(priority, self._queues[5])
+        queue = self._queues.get(normalized_priority, self._queues[2])
         
         try:
             queue.put_nowait(event)
@@ -309,8 +313,8 @@ class EventBus:
     
     async def _get_next_event(self) -> Optional[Event]:
         """Get next event by priority"""
-        # Check queues in priority order
-        for priority in range(1, 11):
+        # Check queues in priority order (1, 2, 3)
+        for priority in [1, 2, 3]:
             queue = self._queues[priority]
             if not queue.empty():
                 try:

@@ -1,12 +1,12 @@
 """
 MEXC Pump Monitor - Short Signal Engine
-Calculates optimal short entry points and tracks signal effectiveness
+Optimized short entry calculation and signal tracking
 """
 
 import time
 import logging
-from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass, field
+from typing import Dict, List, Optional
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from collections import deque
@@ -15,131 +15,119 @@ logger = logging.getLogger(__name__)
 
 
 class SignalResult(Enum):
-    """Результат сигнала"""
-    PENDING = "PENDING"           # Ожидает
-    WIN = "WIN"                   # Профит
-    LOSS = "LOSS"                 # Лосс
-    BREAKEVEN = "BREAKEVEN"       # Безубыток
-    EXPIRED = "EXPIRED"           # Истёк
+    """Signal result"""
+    PENDING = "PENDING"
+    WIN = "WIN"
+    LOSS = "LOSS"
+    BREAKEVEN = "BREAKEVEN"
+    EXPIRED = "EXPIRED"
 
 
 @dataclass
 class ShortEntry:
-    """Точки входа в шорт"""
+    """Short entry points"""
     symbol: str
     timestamp: int
-    
-    # Цены
     current_price: float
     
-    # Зона входа
-    entry_ideal: float          # Идеальная точка входа
-    entry_zone_low: float       # Нижняя граница зоны
-    entry_zone_high: float      # Верхняя граница зоны
+    # Entry zone
+    entry_ideal: float
+    entry_zone_low: float
+    entry_zone_high: float
     
-    # Стоп-лосс уровни
-    stop_loss: float            # Основной стоп
-    stop_loss_tight: float      # Тайтовый стоп (меньше риска)
-    stop_loss_wide: float       # Широкий стоп (больше запаса)
+    # Stop-loss levels
+    stop_loss: float
+    stop_loss_tight: float
+    stop_loss_wide: float
     
-    # Тейк-профиты
-    tp1: float                  # TP1 - 30% позиции (-3%)
-    tp2: float                  # TP2 - 40% позиции (-7%)
-    tp3: float                  # TP3 - 30% позиции (-15%)
+    # Take-profit levels
+    tp1: float
+    tp2: float
+    tp3: float
     
-    # Ключевые уровни
+    # Key levels
     ema20: float = 0
     ema50: float = 0
-    support_level: float = 0    # Ближайшая поддержка
+    support_level: float = 0
     
-    # Риск/Награда
+    # Risk/Reward
     risk_reward_ratio: float = 0
-    risk_pct: float = 0         # Риск в %
-    reward_pct: float = 0       # Потенциал в %
+    risk_pct: float = 0
+    reward_pct: float = 0
     
-    # Рекомендации
-    position_size_pct: float = 0  # % от депозита
+    # Recommendations
+    position_size_pct: float = 0
     leverage_recommended: int = 1
-    confidence: int = 50        # 0-100
+    confidence: int = 50
     
     def format_telegram(self) -> str:
-        """Форматировать для Telegram"""
+        """Format for Telegram"""
         risk_emoji = "🟢" if self.risk_reward_ratio >= 3 else "🟡" if self.risk_reward_ratio >= 2 else "🔴"
+        price = self.current_price
         
-        msg = f"""
-🎯 <b>SHORT SIGNAL / ШОРТ СИГНАЛ: {self.symbol}</b>
+        return f"""
+🎯 <b>SHORT SIGNAL: {self.symbol}</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-💰 <b>Current Price / Текущая Цена:</b> ${self.current_price:.8f}
+💰 <b>Current Price:</b> ${price:.8f}
 
-📍 <b>ENTRY ZONE / ЗОНА ВХОДА:</b>
-├ 🎯 Ideal / Идеал: ${self.entry_ideal:.8f}
-├ 📉 Min / Мин: ${self.entry_zone_low:.8f}
-└ 📈 Max / Макс: ${self.entry_zone_high:.8f}
+📍 <b>ENTRY ZONE:</b>
+├ 🎯 Ideal: ${self.entry_ideal:.8f}
+├ 📉 Min: ${self.entry_zone_low:.8f}
+└ 📈 Max: ${self.entry_zone_high:.8f}
 
-🛑 <b>STOP-LOSS / СТОП-ЛОССЫ:</b>
-├ 🔴 Tight / Тайт: ${self.stop_loss_tight:.8f} ({((self.stop_loss_tight/self.current_price-1)*100):+.1f}%)
-├ 🟡 Normal / Норм: ${self.stop_loss:.8f} ({((self.stop_loss/self.current_price-1)*100):+.1f}%)
-└ 🟢 Wide / Широк: ${self.stop_loss_wide:.8f} ({((self.stop_loss_wide/self.current_price-1)*100):+.1f}%)
+🛑 <b>STOP-LOSS:</b>
+├ 🔴 Tight: ${self.stop_loss_tight:.8f} ({((self.stop_loss_tight/price-1)*100):+.1f}%)
+├ 🟡 Normal: ${self.stop_loss:.8f} ({((self.stop_loss/price-1)*100):+.1f}%)
+└ 🟢 Wide: ${self.stop_loss_wide:.8f} ({((self.stop_loss_wide/price-1)*100):+.1f}%)
 
-🎁 <b>TAKE-PROFITS / ТЕЙК-ПРОФИТЫ:</b>
-├ TP1: ${self.tp1:.8f} ({((self.tp1/self.current_price-1)*100):+.1f}%) — 30%
-├ TP2: ${self.tp2:.8f} ({((self.tp2/self.current_price-1)*100):+.1f}%) — 40%
-└ TP3: ${self.tp3:.8f} ({((self.tp3/self.current_price-1)*100):+.1f}%) — 30%
+🎁 <b>TAKE-PROFITS:</b>
+├ TP1: ${self.tp1:.8f} ({((self.tp1/price-1)*100):+.1f}%) — 30%
+├ TP2: ${self.tp2:.8f} ({((self.tp2/price-1)*100):+.1f}%) — 40%
+└ TP3: ${self.tp3:.8f} ({((self.tp3/price-1)*100):+.1f}%) — 30%
 
-{risk_emoji} <b>RISK/REWARD / РИСК/ПРИБЫЛЬ:</b> 1:{self.risk_reward_ratio:.1f}
-├ 📉 Risk / Риск: {self.risk_pct:.1f}%
-└ 📈 Potential / Потенциал: {self.reward_pct:.1f}%
+{risk_emoji} <b>R:R:</b> 1:{self.risk_reward_ratio:.1f}
+├ 📉 Risk: {self.risk_pct:.1f}%
+└ 📈 Potential: {self.reward_pct:.1f}%
 
-⚙️ <b>RECOMMENDATIONS / РЕКОМЕНДАЦИИ:</b>
-├ 📊 Size / Размер: {self.position_size_pct:.0f}% of deposit
-├ 💪 Leverage / Плечо: {self.leverage_recommended}x
-└ 🎯 Confidence / Уверенность: {self.confidence}%
+⚙️ <b>RECOMMENDATIONS:</b>
+├ 📊 Size: {self.position_size_pct:.0f}% of deposit
+├ 💪 Leverage: {self.leverage_recommended}x
+└ 🎯 Confidence: {self.confidence}%
 
-👉 <a href="https://futures.mexc.com/exchange/{self.symbol}_USDT"><b>OPEN SHORT POSITION ({self.symbol})</b></a>
-"""
-        return msg.strip()
+👉 <a href="https://futures.mexc.com/exchange/{self.symbol}_USDT"><b>OPEN SHORT ({self.symbol})</b></a>
+""".strip()
 
 
 @dataclass 
 class SignalRecord:
-    """Запись сигнала для трекинга"""
+    """Signal record for tracking"""
     signal_id: str
     symbol: str
-    signal_type: str            # "SHORT" или "LONG"
+    signal_type: str
     timestamp: int
-    
-    # Цены при сигнале
     entry_price: float
     stop_loss: float
     take_profit: float
     
-    # Результат
     result: SignalResult = SignalResult.PENDING
     exit_price: float = 0
     exit_timestamp: int = 0
-    
-    # P&L
     pnl_pct: float = 0
     pnl_usd: float = 0
-    
-    # Meta
     confidence: int = 50
     reasoning: str = ""
     
     def calculate_result(self, current_price: float):
-        """Рассчитать результат"""
+        """Calculate result based on current price"""
         if self.signal_type == "SHORT":
             self.pnl_pct = (self.entry_price - current_price) / self.entry_price * 100
-        else:
-            self.pnl_pct = (current_price - self.entry_price) / self.entry_price * 100
-        
-        if self.signal_type == "SHORT":
             if current_price >= self.stop_loss:
                 self.result = SignalResult.LOSS
             elif current_price <= self.take_profit:
                 self.result = SignalResult.WIN
         else:
+            self.pnl_pct = (current_price - self.entry_price) / self.entry_price * 100
             if current_price <= self.stop_loss:
                 self.result = SignalResult.LOSS
             elif current_price >= self.take_profit:
@@ -147,12 +135,24 @@ class SignalRecord:
 
 
 class ShortEntryCalculator:
-    """Калькулятор точек входа в шорт"""
+    """Short entry calculator - optimized"""
+    
+    # Confidence boost thresholds
+    RSI_BOOSTS = [(80, 25), (70, 15), (60, 5)]
+    VOLUME_BOOSTS = [(5, 15), (3, 10)]
+    CHANGE_BOOSTS = [(20, 15), (10, 10)]
+    MANIP_BOOSTS = [(70, 15), (50, 10)]
+    
+    # Position sizing by confidence
+    SIZING = [
+        (80, 10, 5),  # confidence >= 80: 10% size, 5x leverage
+        (70, 7, 3),
+        (60, 5, 2),
+        (0, 3, 1)
+    ]
     
     def __init__(self):
-        self.stats = {
-            'entries_calculated': 0
-        }
+        self.stats = {'entries_calculated': 0}
     
     def calculate_entry(
         self,
@@ -167,95 +167,64 @@ class ShortEntryCalculator:
         support_level: float = 0,
         manipulation_confidence: int = 0
     ) -> ShortEntry:
-        """
-        Рассчитать оптимальные точки входа в шорт
-        
-        Логика:
-        1. Entry zone: текущая цена ± ATR
-        2. Stop-loss: на основе ATR и волатильности
-        3. Take-profits: на уровнях EMA и поддержки
-        """
+        """Calculate optimal short entry points"""
         now = int(time.time() * 1000)
+        price = current_price
         
-        # === ЗОНА ВХОДА ===
-        # Идеальный вход - чуть выше текущей (ждём ещё роста)
-        entry_ideal = current_price * 1.005  # +0.5%
-        entry_zone_low = current_price * 0.995  # -0.5%
-        entry_zone_high = current_price * 1.02  # +2%
+        # Entry zone
+        entry_ideal = price * 1.005
+        entry_zone_low = price * 0.995
+        entry_zone_high = price * 1.02
         
-        # === СТОП-ЛОССЫ ===
-        # Базовый стоп: 1.5 ATR выше текущей цены
-        stop_base = current_price + (atr * 1.5) if atr > 0 else current_price * 1.04
+        # Stop-loss calculations
+        atr_based = atr > 0
+        stop_base = price + (atr * 1.5) if atr_based else price * 1.04
+        stop_tight = min(price + atr, price * 1.025) if atr_based else price * 1.025
+        stop_wide = price + (atr * 2) if atr_based else price * 1.05
         
-        # Тайтовый: 1 ATR или 2.5%
-        stop_tight = min(current_price + atr, current_price * 1.025) if atr > 0 else current_price * 1.025
+        # Take-profit levels
+        tp1 = min(ema20 * 1.01, price * 0.97)
+        tp2 = min(ema50, price * 0.93) if ema50 > 0 else price * 0.93
+        tp3 = max(support_level if support_level > 0 else price * 0.85, price * 0.85)
         
-        # Широкий: 2 ATR или 5%
-        stop_wide = current_price + (atr * 2) if atr > 0 else current_price * 1.05
-        
-        # === ТЕЙК-ПРОФИТЫ ===
-        # TP1: Откат к EMA20 или -3%
-        tp1 = min(ema20 * 1.01, current_price * 0.97)
-        
-        # TP2: Откат к EMA50 или -7%
-        tp2 = min(ema50, current_price * 0.93) if ema50 > 0 else current_price * 0.93
-        
-        # TP3: К поддержке или -15%
-        tp3 = support_level if support_level > 0 else current_price * 0.85
-        tp3 = max(tp3, current_price * 0.85)  # Минимум -15%
-        
-        # === РИСК/НАГРАДА ===
-        risk_pct = ((stop_base - current_price) / current_price) * 100
-        reward_pct = ((current_price - tp2) / current_price) * 100
+        # Risk/Reward
+        risk_pct = ((stop_base - price) / price) * 100
+        reward_pct = ((price - tp2) / price) * 100
         rr_ratio = reward_pct / risk_pct if risk_pct > 0 else 0
         
-        # === CONFIDENCE ===
+        # Confidence calculation
         confidence = 50
         
-        # RSI > 70 = overbought
-        if rsi >= 80:
-            confidence += 25
-        elif rsi >= 70:
-            confidence += 15
-        elif rsi >= 60:
-            confidence += 5
+        for threshold, boost in self.RSI_BOOSTS:
+            if rsi >= threshold:
+                confidence += boost
+                break
         
-        # Высокий объём = подтверждение
-        if volume_ratio >= 5:
-            confidence += 15
-        elif volume_ratio >= 3:
-            confidence += 10
+        for threshold, boost in self.VOLUME_BOOSTS:
+            if volume_ratio >= threshold:
+                confidence += boost
+                break
         
-        # Сильный памп
-        if price_change_pct >= 20:
-            confidence += 15
-        elif price_change_pct >= 10:
-            confidence += 10
+        for threshold, boost in self.CHANGE_BOOSTS:
+            if price_change_pct >= threshold:
+                confidence += boost
+                break
         
-        # Манипуляция детектирована
-        if manipulation_confidence >= 70:
-            confidence += 15
-        elif manipulation_confidence >= 50:
-            confidence += 10
+        for threshold, boost in self.MANIP_BOOSTS:
+            if manipulation_confidence >= threshold:
+                confidence += boost
+                break
         
         confidence = min(100, confidence)
         
-        # === РАЗМЕР ПОЗИЦИИ ===
-        # Чем выше уверенность, тем больше можно рисковать
-        if confidence >= 80:
-            position_size = 10  # 10% депозита
-            leverage = 5
-        elif confidence >= 70:
-            position_size = 7
-            leverage = 3
-        elif confidence >= 60:
-            position_size = 5
-            leverage = 2
-        else:
-            position_size = 3
-            leverage = 1
+        # Position sizing
+        position_size, leverage = 3, 1
+        for threshold, size, lev in self.SIZING:
+            if confidence >= threshold:
+                position_size, leverage = size, lev
+                break
         
-        # Корректировка по R:R
+        # R:R adjustment
         if rr_ratio < 1.5:
             position_size = int(position_size * 0.5)
             leverage = 1
@@ -265,7 +234,7 @@ class ShortEntryCalculator:
         return ShortEntry(
             symbol=symbol,
             timestamp=now,
-            current_price=current_price,
+            current_price=price,
             entry_ideal=entry_ideal,
             entry_zone_low=entry_zone_low,
             entry_zone_high=entry_zone_high,
@@ -288,7 +257,7 @@ class ShortEntryCalculator:
 
 
 class SignalTracker:
-    """Трекер эффективности сигналов"""
+    """Signal effectiveness tracker - optimized"""
     
     def __init__(self, max_history: int = 1000):
         self.signals: Dict[str, SignalRecord] = {}
@@ -320,10 +289,10 @@ class SignalTracker:
         confidence: int = 50,
         reasoning: str = ""
     ) -> str:
-        """Добавить сигнал для трекинга"""
+        """Add signal for tracking"""
         signal_id = f"{symbol}_{int(time.time())}"
         
-        record = SignalRecord(
+        self.signals[signal_id] = SignalRecord(
             signal_id=signal_id,
             symbol=symbol,
             signal_type=signal_type,
@@ -335,23 +304,20 @@ class SignalTracker:
             reasoning=reasoning
         )
         
-        self.signals[signal_id] = record
         self.stats['total_signals'] += 1
         self.stats['pending'] += 1
         
         return signal_id
     
     def update_signal(self, signal_id: str, current_price: float) -> Optional[SignalRecord]:
-        """Обновить сигнал с текущей ценой"""
-        if signal_id not in self.signals:
+        """Update signal with current price"""
+        record = self.signals.get(signal_id)
+        if not record:
             return None
         
-        record = self.signals[signal_id]
         old_result = record.result
-        
         record.calculate_result(current_price)
         
-        # Если результат изменился с PENDING
         if old_result == SignalResult.PENDING and record.result != SignalResult.PENDING:
             record.exit_price = current_price
             record.exit_timestamp = int(time.time() * 1000)
@@ -359,7 +325,6 @@ class SignalTracker:
             self.stats['pending'] -= 1
             self._update_stats(record)
             
-            # Переместить в историю
             self.history.append(record)
             del self.signals[signal_id]
         
@@ -371,11 +336,11 @@ class SignalTracker:
         exit_price: float,
         result: SignalResult = None
     ) -> Optional[SignalRecord]:
-        """Закрыть сигнал вручную"""
-        if signal_id not in self.signals:
+        """Close signal manually"""
+        record = self.signals.get(signal_id)
+        if not record:
             return None
         
-        record = self.signals[signal_id]
         record.exit_price = exit_price
         record.exit_timestamp = int(time.time() * 1000)
         record.calculate_result(exit_price)
@@ -392,93 +357,74 @@ class SignalTracker:
         return record
     
     def _update_stats(self, record: SignalRecord):
-        """Обновить статистику"""
-        if record.result == SignalResult.WIN:
-            self.stats['wins'] += 1
-            self.stats['total_pnl_pct'] += record.pnl_pct
-            if record.pnl_pct > self.stats['best_trade_pct']:
-                self.stats['best_trade_pct'] = record.pnl_pct
-                
-        elif record.result == SignalResult.LOSS:
-            self.stats['losses'] += 1
-            self.stats['total_pnl_pct'] += record.pnl_pct
-            if record.pnl_pct < self.stats['worst_trade_pct']:
-                self.stats['worst_trade_pct'] = record.pnl_pct
-                
-        elif record.result == SignalResult.BREAKEVEN:
-            self.stats['breakevens'] += 1
-            
-        elif record.result == SignalResult.EXPIRED:
-            self.stats['expired'] += 1
+        """Update statistics"""
+        s = self.stats
         
-        # Пересчитать метрики
-        total_closed = self.stats['wins'] + self.stats['losses']
+        if record.result == SignalResult.WIN:
+            s['wins'] += 1
+            s['total_pnl_pct'] += record.pnl_pct
+            s['best_trade_pct'] = max(s['best_trade_pct'], record.pnl_pct)
+        elif record.result == SignalResult.LOSS:
+            s['losses'] += 1
+            s['total_pnl_pct'] += record.pnl_pct
+            s['worst_trade_pct'] = min(s['worst_trade_pct'], record.pnl_pct)
+        elif record.result == SignalResult.BREAKEVEN:
+            s['breakevens'] += 1
+        elif record.result == SignalResult.EXPIRED:
+            s['expired'] += 1
+        
+        # Recalculate metrics
+        total_closed = s['wins'] + s['losses']
         if total_closed > 0:
-            self.stats['win_rate'] = (self.stats['wins'] / total_closed) * 100
+            s['win_rate'] = (s['wins'] / total_closed) * 100
             
-            # Средние
             wins = [r for r in self.history if r.result == SignalResult.WIN]
             losses = [r for r in self.history if r.result == SignalResult.LOSS]
             
-            if wins:
-                self.stats['avg_win_pct'] = sum(r.pnl_pct for r in wins) / len(wins)
-            if losses:
-                self.stats['avg_loss_pct'] = sum(r.pnl_pct for r in losses) / len(losses)
+            s['avg_win_pct'] = sum(r.pnl_pct for r in wins) / len(wins) if wins else 0
+            s['avg_loss_pct'] = sum(r.pnl_pct for r in losses) / len(losses) if losses else 0
             
-            # Profit Factor
             gross_profit = sum(r.pnl_pct for r in wins) if wins else 0
             gross_loss = abs(sum(r.pnl_pct for r in losses)) if losses else 0
-            self.stats['profit_factor'] = gross_profit / gross_loss if gross_loss > 0 else 0
+            s['profit_factor'] = gross_profit / gross_loss if gross_loss > 0 else 0
     
     def get_active_signals(self) -> List[SignalRecord]:
-        """Получить активные сигналы"""
+        """Get active signals"""
         return list(self.signals.values())
     
     def format_stats(self) -> str:
-        """Форматировать статистику"""
+        """Format statistics"""
         s = self.stats
+        wr_emoji = "🟢" if s['win_rate'] >= 60 else "🟡" if s['win_rate'] >= 50 else "🔴"
+        pnl_emoji = "🟢" if s['total_pnl_pct'] >= 0 else "🔴"
         
-        # Emoji для винрейта
-        wr = s['win_rate']
-        if wr >= 60:
-            wr_emoji = "🟢"
-        elif wr >= 50:
-            wr_emoji = "🟡"
-        else:
-            wr_emoji = "🔴"
-        
-        # Emoji для PnL
-        pnl = s['total_pnl_pct']
-        pnl_emoji = "🟢" if pnl >= 0 else "🔴"
-        
-        msg = f"""
-📊 <b>СТАТИСТИКА СИГНАЛОВ</b>
+        return f"""
+📊 <b>SIGNAL STATISTICS</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-📈 <b>ОБЩАЯ СТАТИСТИКА:</b>
-├ Всего сигналов: {s['total_signals']}
-├ ✅ Винов: {s['wins']}
-├ ❌ Лоссов: {s['losses']}
-├ ⏳ В ожидании: {s['pending']}
-└ ⌛ Истекло: {s['expired']}
+📈 <b>OVERVIEW:</b>
+├ Total: {s['total_signals']}
+├ ✅ Wins: {s['wins']}
+├ ❌ Losses: {s['losses']}
+├ ⏳ Pending: {s['pending']}
+└ ⌛ Expired: {s['expired']}
 
-{wr_emoji} <b>ВИНРЕЙТ:</b> {s['win_rate']:.1f}%
+{wr_emoji} <b>WIN RATE:</b> {s['win_rate']:.1f}%
 
-{pnl_emoji} <b>ОБЩИЙ P&L:</b> {s['total_pnl_pct']:+.2f}%
+{pnl_emoji} <b>TOTAL P&L:</b> {s['total_pnl_pct']:+.2f}%
 
-💰 <b>СРЕДНИЕ:</b>
-├ Ср. вин: {s['avg_win_pct']:+.2f}%
-├ Ср. лосс: {s['avg_loss_pct']:+.2f}%
+💰 <b>AVERAGES:</b>
+├ Avg Win: {s['avg_win_pct']:+.2f}%
+├ Avg Loss: {s['avg_loss_pct']:+.2f}%
 └ Profit Factor: {s['profit_factor']:.2f}
 
-🏆 <b>ЛУЧШАЯ СДЕЛКА:</b> {s['best_trade_pct']:+.2f}%
-💀 <b>ХУДШАЯ СДЕЛКА:</b> {s['worst_trade_pct']:+.2f}%
-"""
-        return msg.strip()
+🏆 <b>BEST:</b> {s['best_trade_pct']:+.2f}%
+💀 <b>WORST:</b> {s['worst_trade_pct']:+.2f}%
+""".strip()
 
 
 class TelegramAlertFormatter:
-    """Форматтер красивых Telegram алертов"""
+    """Telegram alert formatter - optimized as static methods"""
     
     @staticmethod
     def format_pump_detected(
@@ -489,40 +435,32 @@ class TelegramAlertFormatter:
         score: int,
         rsi: float
     ) -> str:
-        """Алерт о детекте пампа"""
-        
-        # Emoji по силе пампа
+        """Pump detected alert"""
         if price_change_pct >= 20:
-            pump_emoji = "🚀🚀🚀"
-            strength = "МЕГА"
+            emoji, strength = "🚀🚀🚀", "MEGA"
         elif price_change_pct >= 10:
-            pump_emoji = "🚀🚀"
-            strength = "СИЛЬНЫЙ"
+            emoji, strength = "🚀🚀", "STRONG"
         elif price_change_pct >= 5:
-            pump_emoji = "🚀"
-            strength = "СРЕДНИЙ"
+            emoji, strength = "🚀", "MEDIUM"
         else:
-            pump_emoji = "📈"
-            strength = "СЛАБЫЙ"
+            emoji, strength = "📈", "WEAK"
         
-        msg = f"""
-{pump_emoji} <b>ПАМП ОБНАРУЖЕН!</b> {pump_emoji}
+        return f"""
+{emoji} <b>PUMP DETECTED!</b> {emoji}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-🪙 <b>Токен:</b> {symbol}
-💰 <b>Цена:</b> ${price:.8f}
+🪙 <b>Token:</b> {symbol}
+💰 <b>Price:</b> ${price:.8f}
 
-📊 <b>МЕТРИКИ:</b>
-├ 📈 Рост: <b>{price_change_pct:+.1f}%</b>
-├ 📊 Объём: <b>×{volume_ratio:.1f}</b> от среднего
+📊 <b>METRICS:</b>
+├ 📈 Change: <b>{price_change_pct:+.1f}%</b>
+├ 📊 Volume: <b>×{volume_ratio:.1f}</b>
 ├ 📉 RSI: <b>{rsi:.0f}</b>
-└ 🎯 Скор: <b>{score}/100</b>
+└ 🎯 Score: <b>{score}/100</b>
 
-⚡ <b>СИЛА:</b> {strength}
-
+⚡ <b>STRENGTH:</b> {strength}
 ⏰ {datetime.now().strftime('%H:%M:%S')}
-"""
-        return msg.strip()
+""".strip()
     
     @staticmethod
     def format_distribution_detected(
@@ -532,37 +470,30 @@ class TelegramAlertFormatter:
         confidence: int,
         phase: str
     ) -> str:
-        """Алерт о детекте распределения (сигнал на ШОРТ)"""
-        
+        """Distribution detected alert (SHORT signal)"""
         if phase == "DUMPING":
-            alert_emoji = "🚨🚨🚨"
-            urgency = "КРИТИЧЕСКАЯ"
-            action = "ШОРТ СЕЙЧАС!"
+            emoji, urgency, action = "🚨🚨🚨", "CRITICAL", "SHORT NOW!"
         else:
-            alert_emoji = "⚠️⚠️"
-            urgency = "ВЫСОКАЯ"
-            action = "ГОТОВЬ ШОРТ"
+            emoji, urgency, action = "⚠️⚠️", "HIGH", "PREPARE SHORT"
         
-        msg = f"""
-{alert_emoji} <b>РАСПРЕДЕЛЕНИЕ ОБНАРУЖЕНО!</b> {alert_emoji}
+        return f"""
+{emoji} <b>DISTRIBUTION DETECTED!</b> {emoji}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-🪙 <b>Токен:</b> {symbol}
-💰 <b>Цена:</b> ${price:.8f}
+🪙 <b>Token:</b> {symbol}
+💰 <b>Price:</b> ${price:.8f}
 
-🔴 <b>СИГНАЛ: SHORT</b>
+🔴 <b>SIGNAL: SHORT</b>
 
-📊 <b>ИНДИКАТОРЫ:</b>
-├ 📉 Buy/Sell Ratio: <b>{buy_sell_ratio:.2f}</b>
-├ 🎯 Уверенность: <b>{confidence}%</b>
-└ 📍 Фаза: <b>{phase}</b>
+📊 <b>INDICATORS:</b>
+├ 📉 Buy/Sell: <b>{buy_sell_ratio:.2f}</b>
+├ 🎯 Confidence: <b>{confidence}%</b>
+└ 📍 Phase: <b>{phase}</b>
 
-🎬 <b>ДЕЙСТВИЕ:</b> {action}
-⚡ <b>СРОЧНОСТЬ:</b> {urgency}
-
+🎬 <b>ACTION:</b> {action}
+⚡ <b>URGENCY:</b> {urgency}
 ⏰ {datetime.now().strftime('%H:%M:%S')}
-"""
-        return msg.strip()
+""".strip()
     
     @staticmethod
     def format_exit_signal(
@@ -573,38 +504,32 @@ class TelegramAlertFormatter:
         reason: str,
         pnl_pct: float = 0
     ) -> str:
-        """Алерт на выход из позиции"""
-        
+        """Exit signal alert"""
         if urgency == "CRITICAL":
-            emoji = "🚨🚨🚨"
-            urgency_ru = "КРИТИЧЕСКАЯ"
+            emoji, urgency_str = "🚨🚨🚨", "CRITICAL"
         elif urgency == "HIGH":
-            emoji = "⚠️⚠️"
-            urgency_ru = "ВЫСОКАЯ"
+            emoji, urgency_str = "⚠️⚠️", "HIGH"
         else:
-            emoji = "ℹ️"
-            urgency_ru = "СРЕДНЯЯ"
+            emoji, urgency_str = "ℹ️", "MEDIUM"
         
         pnl_emoji = "🟢" if pnl_pct >= 0 else "🔴"
         
-        msg = f"""
-{emoji} <b>СИГНАЛ НА ВЫХОД!</b> {emoji}
+        return f"""
+{emoji} <b>EXIT SIGNAL!</b> {emoji}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-🪙 <b>Токен:</b> {symbol}
-💰 <b>Цена:</b> ${price:.8f}
+🪙 <b>Token:</b> {symbol}
+💰 <b>Price:</b> ${price:.8f}
 
-🎬 <b>ДЕЙСТВИЕ:</b> {action}
-⚡ <b>СРОЧНОСТЬ:</b> {urgency_ru}
+🎬 <b>ACTION:</b> {action}
+⚡ <b>URGENCY:</b> {urgency_str}
 
-📝 <b>ПРИЧИНА:</b>
+📝 <b>REASON:</b>
 {reason}
 
 {pnl_emoji} <b>P&L:</b> {pnl_pct:+.2f}%
-
 ⏰ {datetime.now().strftime('%H:%M:%S')}
-"""
-        return msg.strip()
+""".strip()
     
     @staticmethod
     def format_signal_result(
@@ -615,32 +540,27 @@ class TelegramAlertFormatter:
         pnl_pct: float,
         duration_minutes: int
     ) -> str:
-        """Алерт о результате сигнала"""
-        
+        """Signal result alert"""
         if result == SignalResult.WIN:
-            emoji = "✅🎉"
-            result_text = "ПРОФИТ"
+            emoji, result_text = "✅🎉", "PROFIT"
         elif result == SignalResult.LOSS:
-            emoji = "❌😢"
-            result_text = "ЛОСС"
+            emoji, result_text = "❌😢", "LOSS"
         else:
-            emoji = "➖"
-            result_text = "БЕЗУБЫТОК"
+            emoji, result_text = "➖", "BREAKEVEN"
         
         pnl_emoji = "🟢" if pnl_pct >= 0 else "🔴"
         
-        msg = f"""
-{emoji} <b>СДЕЛКА ЗАКРЫТА: {result_text}</b> {emoji}
+        return f"""
+{emoji} <b>TRADE CLOSED: {result_text}</b> {emoji}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-🪙 <b>Токен:</b> {symbol}
+🪙 <b>Token:</b> {symbol}
 
-📊 <b>РЕЗУЛЬТАТ:</b>
-├ Вход: ${entry_price:.8f}
-├ Выход: ${exit_price:.8f}
+📊 <b>RESULT:</b>
+├ Entry: ${entry_price:.8f}
+├ Exit: ${exit_price:.8f}
 ├ {pnl_emoji} P&L: <b>{pnl_pct:+.2f}%</b>
-└ ⏱ Время: {duration_minutes} мин
+└ ⏱ Duration: {duration_minutes} min
 
 ⏰ {datetime.now().strftime('%H:%M:%S')}
-"""
-        return msg.strip()
+""".strip()

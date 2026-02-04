@@ -112,12 +112,13 @@ def main():
     print("""
     ╔═══════════════════════════════════════════════════════════════════╗
     ║                                                                   ║
-    ║   🧠 MEXC PUMP MONITOR - SYSTEM ORCHESTRATOR 🧠                  ║
+    ║   🧠 MEXC PUMP MONITOR - SIGNAL MODE 🧠                            ║
     ║                                                                   ║
-    ║   ✓ 53 Modules Linked & Synchronized                              ║
-    ║   ✓ Fault Tolerance & Auto-Recovery                              ║
-    ║   ✓ Unified Lifecycle Management                                 ║
-    ║   ✓ "The Perfect Link" Architecture                               ║
+    ║   ✓ Signal Mode - Только сигналы, без автоторговли              ║
+    ║   ✓ Optimized for Memecoins (Fast Detection)                      ║
+    ║   ✓ Ultra-Aggressive Polling (0.5s intervals)                     ║
+    ║   ✓ Light Filters (No Over-Filtering)                             ║
+    ║   ✓ Detailed Signal Formatting                                    ║
     ║                                                                   ║
     ╚═══════════════════════════════════════════════════════════════════╝
     """)

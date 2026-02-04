@@ -155,9 +155,9 @@ class PumpDetector:
         # Signal history
         self.signal_history: List[PumpSignal] = []
         
-        # Cooldown to avoid duplicate signals
+        # Cooldown to avoid duplicate signals - СНИЖЕН для мемкоинов
         self.cooldown: Dict[str, int] = {}  # symbol -> last signal timestamp
-        self.cooldown_minutes = 15
+        self.cooldown_minutes = 5  # Было 15, стало 5 минут для мемкоинов
         
         # Callbacks for new signals
         self._signal_callbacks: List = []
@@ -175,69 +175,71 @@ class PumpDetector:
         self._signal_callbacks.append(callback)
     
     async def start(self):
-        """Start pump detection"""
-        logger.info("Starting pump detector...")
-        
-        # Register for ticker updates
-        self.client.on_ticker(self._on_ticker_update)
+        """Start pump detection - REST ONLY MODE"""
+        logger.info("🚀 Starting pump detector (REST-ONLY MODE)...")
         
         # Initial data load
         await self._initial_load()
         
-        # Start periodic full scan
+        # Start aggressive REST polling loop
         asyncio.create_task(self._scan_loop())
         
-        logger.info("Pump detector started")
+        logger.info("✅ Pump detector started (REST polling every 1s)")
     
     async def _initial_load(self):
-        """Load initial kline data for all symbols"""
+        """Load initial kline data for all symbols (Parallel)"""
         symbols = self.client.get_active_symbols()
-        logger.info(f"Loading initial data for {len(symbols)} symbols...")
+        logger.info(f"🚀 ULTRA-FAST LOAD: Fetching history for {len(symbols)} symbols...")
         
-        for i, symbol in enumerate(symbols):
-            try:
-                klines = await self.client.get_klines(symbol, 'Min1', 100)
-                
-                for kline in klines:
-                    self.history[symbol].add(
-                        price=kline.close,
-                        volume=kline.volume,
-                        timestamp=kline.timestamp
-                    )
-                
-                if (i + 1) % 50 == 0:
-                    logger.info(f"Loaded {i + 1}/{len(symbols)} symbols")
-                
-                await asyncio.sleep(0.1)  # Rate limiting
+        start_time = time.time()
+        semaphore = asyncio.Semaphore(20)  # Limit to 20 concurrent requests
+        
+        async def fetch_symbol(symbol):
+             async with semaphore:
+                 try:
+                     # Only need last 50 candles for RSI/EMA
+                     klines = await self.client.get_klines(symbol, 'Min1', 60)
+                     if not klines: return
+                     
+                     history = self.history[symbol]
+                     for k in klines:
+                         history.add(k.close, k.volume, k.timestamp)
+                         
+                 except Exception as e:
+                     logger.debug(f"Failed to load {symbol}: {e}")
+
+        # Batch processing
+        tasks = [fetch_symbol(s) for s in symbols]
+        
+        # Show progress
+        total = len(tasks)
+        chunk_size = 100
+        
+        for i in range(0, total, chunk_size):
+            chunk = tasks[i:i+chunk_size]
+            await asyncio.gather(*chunk)
+            logger.info(f"⚡ Loaded {min(i+chunk_size, total)}/{total} symbols")
             
-            except Exception as e:
-                logger.error(f"Error loading {symbol}: {e}")
-        
-        logger.info(f"Initial data load complete")
-    
-    async def _on_ticker_update(self, ticker: Ticker):
-        """Process real-time ticker update"""
-        symbol = ticker.symbol
-        
-        # Update history
-        self.history[symbol].add(
-            price=ticker.price,
-            volume=ticker.volume_24h / 1440,  # Approximate per-minute volume
-            timestamp=ticker.timestamp
-        )
-        
-        # Check for pump
-        await self._check_pump(symbol)
+        duration = time.time() - start_time
+        logger.info(f"✅ LOAD COMPLETE in {duration:.2f}s")
     
     async def _scan_loop(self):
-        """Periodic full market scan"""
+        """Aggressive REST polling loop - MEMECOIN OPTIMIZED (ultra-fast)"""
+        logger.info("📡 REST polling loop started (MEMECOIN MODE - 0.5s interval)")
+        
         while True:
             try:
+                start = time.time()
                 await self._full_scan()
-                await asyncio.sleep(30)  # Scan every 30 seconds
+                elapsed = time.time() - start
+                
+                # ULTRA-AGGRESSIVE polling: 0.5 second interval для мемкоинов
+                sleep_time = max(0.05, 0.5 - elapsed)
+                await asyncio.sleep(sleep_time)
+                
             except Exception as e:
                 logger.error(f"Scan loop error: {e}")
-                await asyncio.sleep(5)
+                await asyncio.sleep(1)  # Было 2, стало 1
     
     async def _full_scan(self):
         """Scan all symbols for pumps"""
@@ -264,14 +266,17 @@ class PumpDetector:
             if time.time() * 1000 < cooldown_until:
                 return
         
-        # Get price change
-        price_change = history.get_price_change(
-            self.config.pump.time_window_minutes
-        )
+        # Get price change (main window and micro window)
+        price_change_main = history.get_price_change(self.config.pump.time_window_minutes)
+        price_change_micro = history.get_price_change(self.config.pump.micro_pump_window)
         
-        # Check minimum pump threshold
-        if price_change < self.config.pump.min_price_change_pct:
+        # Trigger on ANY pump: main OR micro window
+        if price_change_main < self.config.pump.min_price_change_pct and \
+           price_change_micro < self.config.pump.micro_pump_pct:
             return
+        
+        # Use the stronger move for scoring/formatting
+        price_change = max(price_change_main, price_change_micro)
         
         # Calculate indicators
         indicators = calculate_all_indicators(
@@ -280,32 +285,14 @@ class PumpDetector:
             current_volume=history.volumes[-1] if history.volumes else 0
         )
         
-        # Check volume confirmation
-        if indicators.volume_ratio < self.config.pump.min_volume_multiplier:
-            return
-        
-        # RSI check
-        if indicators.rsi < self.config.pump.rsi_overbought:
-            return
-        
         self.stats['pumps_detected'] += 1
         
-        # Calculate score
+        # Calculate score (for informational purposes; без отсечения)
         score, breakdown = self._calculate_score(indicators, price_change)
         
-        # Check minimum score threshold
-        if score < self.config.scoring.min_score_threshold:
-            return
-        
-        # Get volume USD estimate
+        # Volume USD estimate (информационное поле)
         ticker = self.client.tickers.get(symbol)
         volume_usd = ticker.volume_24h * ticker.price if ticker else 0
-        
-        # Apply volume filters
-        if volume_usd < self.config.filters.min_daily_volume_usd:
-            return
-        if volume_usd > self.config.filters.max_daily_volume_usd:
-            return
         
         # Create signal
         signal = PumpSignal(

@@ -17,6 +17,7 @@ import numpy as np
 from datetime import datetime
 from dataclasses import asdict
 from typing import Dict, Any, Optional
+from indicators import calculate_ema, calculate_rsi, calculate_volume_ratio
 
 # --- CORE MODULES ---
 from config import config
@@ -65,6 +66,7 @@ from market_heatmap import MarketHeatMap
 from advanced_pattern_scanner import AdvancedPatternScanner
 from profit_maximizer import ProfitMaximizer
 from hedge_manager import HedgeManager
+from smart_levels import SmartLevelsCalculator
 
 logger = logging.getLogger("Orchestrator")
 
@@ -105,6 +107,7 @@ class SystemOrchestrator:
         self.tokenomics = TokenomicsFetcher()
         self.pattern_engine = PatternRecognition()
         self.smart_filter = SmartFilter()
+        self.smart_levels = SmartLevelsCalculator()
         
         # 4. Ultimate Modules
         self.sentiment = SentimentAnalyzer()
@@ -292,12 +295,13 @@ class SystemOrchestrator:
         self.smart_filter.record_pump(symbol)
         
         # 🚨 IMMEDIATE PUMP ALERT (Before Analysis)
+        tw = getattr(pump_signal, 'time_window_min', getattr(pump_signal, 'time_window_minutes', config.pump.time_window_minutes))
         instant_msg = f"""
 🚨 <b>PUMP DETECTED / ПАМП ОБНАРУЖЕН</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 🪙 <b>Token / Токен:</b> #{symbol}
 📈 <b>Change / Изменение:</b> +{pump_signal.price_change_pct:.1f}%
-⏱️ <b>Time / Время:</b> {pump_signal.time_window_min} мин
+⏱️ <b>Time / Время:</b> {tw} мин
 💰 <b>Volume / Объём:</b> ${pump_signal.volume_usd:,.0f}
 📊 <b>Price / Цена:</b> ${pump_signal.price:.6f}
 
@@ -342,19 +346,51 @@ class SystemOrchestrator:
             logger.info(f"🔧 TECHNICAL PUMP (NO NEWS): {symbol} -> Preparing SHORT")
             signal_type = 'TECHNICAL_PUMP_FADE'
             
-            # Calculate Short Entry
-            short_analysis = self.short_calc.analyze_pump(
-                symbol=symbol,
-                current_price=pump_signal.price,
-                rsi=70, # Mock, ideally fetch real RSI
-                volume_spike=pump_signal.volume_usd
-            )
-            
-            if short_analysis and short_analysis.get('recommendation') == 'SHORT':
-                 entry = short_analysis.get('entry_price')
-                 sl = short_analysis.get('stop_loss')
-                 
-                 msg = f"""
+            entry = None
+            sl = None
+            if hasattr(self.short_calc, 'calculate_entry'):
+                klines = []
+                try:
+                    klines = await self.client.get_klines(symbol, 'Min1', 50)
+                except Exception:
+                    klines = []
+                prices = [k.close for k in klines] if klines else []
+                ema20 = calculate_ema(prices, 20) if prices else pump_signal.price
+                ema50 = calculate_ema(prices, 50) if prices else pump_signal.price
+                rsi_val = calculate_rsi(prices) if prices else 70
+                volume_ratio = 1.0
+                if klines:
+                    hist_vols = [k.volume for k in klines[:-1]] if len(klines) > 1 else [klines[0].volume]
+                    curr_vol = klines[-1].volume
+                    volume_ratio = calculate_volume_ratio(curr_vol, hist_vols) if hist_vols else 1.0
+                atr = 0.0
+                se = self.short_calc.calculate_entry(
+                    symbol=symbol,
+                    current_price=pump_signal.price,
+                    ema20=ema20,
+                    ema50=ema50,
+                    rsi=rsi_val,
+                    atr=atr,
+                    volume_ratio=volume_ratio,
+                    price_change_pct=pump_signal.price_change_pct,
+                    support_level=0,
+                    manipulation_confidence=0
+                )
+                entry = se.entry_ideal
+                sl = se.stop_loss
+            elif hasattr(self.short_calc, 'analyze_pump'):
+                short_analysis = self.short_calc.analyze_pump(
+                    symbol=symbol,
+                    current_price=pump_signal.price,
+                    rsi=70,
+                    volume_spike=pump_signal.volume_usd
+                )
+                if short_analysis and short_analysis.get('recommendation') == 'SHORT':
+                    entry = short_analysis.get('entry_price')
+                    sl = short_analysis.get('stop_loss')
+
+            if entry and sl:
+                msg = f"""
 📉 <b>SHORT OPPORTUNITY (AI) / ШОРТ ВОЗМОЖНОСТЬ</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 🪙 <b>Token / Токен:</b> #{symbol}
@@ -362,44 +398,149 @@ class SystemOrchestrator:
 📉 <b>Entry / Вход:</b> {entry}
 🛑 <b>SL / Стоп:</b> {sl}
 
-👉 <a href="https://futures.mexc.com/exchange/{symbol}_USDT"><b>SHORT {symbol} ON MEXC</b></a>
+👉 <a href=\"https://futures.mexc.com/exchange/{symbol}_USDT\"><b>SHORT {symbol} ON MEXC</b></a>
 """
-                 await self.telegram.send_message(msg)
-                 
-                 # Emit as SHORT signal
-                 await emit_signal(symbol, 'A_TIER', 80, entry, sl, entry*0.95)
+                await self.telegram.send_message(msg)
+                await emit_signal(symbol, 'A_TIER', 80, entry, sl, entry*0.95)
 
         await emit_pump_detected(symbol, pump_signal.price, pump_signal.price_change_pct, signal_type, score)
         
-        # Enhanced Analysis logic (simplified call)
-        # In a real perfect link, we'd delegate this back to SignalEngine
-        # But for now preserving logic:
-        # Import local to avoid circular dep if any
+        # Enhanced Analysis logic с умными уровнями
         from indicators import calculate_all_indicators
         history = self.pump_detector.history.get(symbol)
         if history:
+            # Записать свечи в smart_levels для анализа
+            ticker = self.client.tickers.get(symbol)
+            if ticker:
+                # Получить последние свечи для анализа
+                try:
+                    klines = await self.client.get_klines(symbol, 'Min1', 50)
+                    if klines:
+                        for kline in klines:
+                            self.smart_levels.record_candle(
+                                symbol=symbol,
+                                open_price=kline.open,
+                                high=kline.high,
+                                low=kline.low,
+                                close=kline.close,
+                                volume=kline.volume,
+                                timestamp=kline.timestamp
+                            )
+                except Exception as e:
+                    logger.debug(f"Could not fetch klines for {symbol}: {e}")
+            
             indicators = calculate_all_indicators(history.prices, history.volumes, history.volumes[-1])
             enhanced = await self.signal_engine.generate_signal(
                  symbol, pump_signal.price, pump_signal.price_change_pct, indicators, pump_signal.volume_usd
             )
             if enhanced:
+                # Рассчитать умные уровни (с order book)
+                smart_levels = await self.smart_levels.calculate_smart_levels(
+                    symbol=symbol,
+                    current_price=pump_signal.price,
+                    side='SHORT',  # Для пампов обычно шорт
+                    pump_size_pct=pump_signal.price_change_pct,
+                    client=self.client
+                )
+                
+                # Обновить уровни в сигнале если есть умные уровни
+                if smart_levels:
+                    enhanced.entry_price = smart_levels.entry_optimal
+                    enhanced.entry_zone_low = smart_levels.entry_zone_low
+                    enhanced.entry_zone_high = smart_levels.entry_zone_high
+                    enhanced.stop_loss = smart_levels.stop_loss
+                    enhanced.take_profit_1 = smart_levels.take_profit_1
+                    enhanced.take_profit_2 = smart_levels.take_profit_2
+                    # Сохранить smart_levels в сигнале для форматтера
+                    enhanced.smart_levels = smart_levels
+                    # Добавить информацию о паттернах
+                    if smart_levels.detected_patterns:
+                        enhanced.warnings.append(f"Паттерны: {', '.join(smart_levels.detected_patterns[:3])}")
+                    # Добавить предупреждения из smart_levels
+                    enhanced.warnings.extend(smart_levels.warnings)
+                
                 self.stats['signals_generated'] += 1
 
     async def _on_enhanced_signal(self, signal):
         logger.info(f"📊 SIGNAL: {signal.symbol} Score: {signal.final_score}")
+        eligible = True
+        gating_reasons = []
+        try:
+            news = self.news_bot.get_news_by_token(signal.symbol)
+            recent_news = [n for n in news if (time.time() * 1000 - n.timestamp) < 3600000]
+            if recent_news:
+                eligible = False
+                gating_reasons.append("news catalyst")
+        except Exception:
+            pass
+        
+        try:
+            ob = await self.client.get_orderbook(signal.symbol, depth=20)
+            if not ob or not ob.get('bids') or not ob.get('asks'):
+                eligible = False
+                gating_reasons.append("no orderbook")
+            else:
+                best_bid = max(p for p, _ in ob['bids'])
+                best_ask = min(p for p, _ in ob['asks'])
+                mid = (best_bid + best_ask) / 2 if best_bid and best_ask else 0
+                spread_pct = ((best_ask - best_bid) / mid * 100) if mid > 0 else 999
+                depth_bids = sum(p * q for p, q in ob['bids'][:10])
+                depth_asks = sum(p * q for p, q in ob['asks'][:10])
+                min_depth_usd = min(depth_bids, depth_asks)
+                if spread_pct > config.filters.max_spread_pct:
+                    eligible = False
+                    gating_reasons.append(f"spread {spread_pct:.2f}% > {config.filters.max_spread_pct}%")
+                if min_depth_usd < config.filters.min_orderbook_depth_usd:
+                    eligible = False
+                    gating_reasons.append(f"depth ${min_depth_usd:,.0f} < ${config.filters.min_orderbook_depth_usd:,.0f}")
+        except Exception:
+            eligible = False
+            gating_reasons.append("orderbook check failed")
+        
+        try:
+            if hasattr(signal, 'whale_pressure') and signal.whale_pressure is not None:
+                if signal.whale_pressure > config.filters.whale_pressure_short_max:
+                    eligible = False
+                    gating_reasons.append(f"whales {signal.whale_pressure}% > {config.filters.whale_pressure_short_max}%")
+        except Exception:
+            pass
         
         # Self Learning & Execution
         try:
              signal_dict = asdict(signal)
              should_take, reason = self.self_learning.should_take_signal(signal_dict)
              
-             if should_take:
+             if should_take and eligible:
                  self.self_learning.track_signal(signal_dict)
                  if signal.quality in [SignalQuality.S_TIER, SignalQuality.A_TIER] and signal.final_score >= 80:
                      await self.profit_maximizer.execute_signal(signal_dict)
+             elif not eligible:
+                 try:
+                     signal.warnings.append(f"GATED: {'; '.join(gating_reasons)}")
+                 except Exception:
+                     pass
         except Exception as e:
              logger.error(f"Execution Logic Error: {e}")
              
+        try:
+            s = self.signal_tracker.stats
+            wr = float(s.get('win_rate', 0.0))
+            candor = int(max(0, min(10, round(signal.final_score/10 - len(gating_reasons)))))
+            if wr >= 60:
+                candor = min(10, candor + 1)
+            elif wr <= 40 and (s.get('wins', 0) + s.get('losses', 0)) > 0:
+                candor = max(0, candor - 1)
+            detail = f"GATED: {'; '.join(gating_reasons)}" if not eligible else "Без критичных проблем"
+            msg = (
+                f"🧪 Честная оценка: {candor}/10\n"
+                f"Качество: {signal.quality.value} | Score: {signal.final_score}/100\n"
+                f"Win‑rate: {wr:.1f}%\n"
+                f"{detail}"
+            )
+            await self.telegram.send_message(msg)
+        except Exception:
+            pass
+        
         # Notify
         await emit_signal(signal.symbol, signal.quality.value, signal.final_score, signal.entry_price, signal.stop_loss, signal.take_profit_1)
         
