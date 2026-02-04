@@ -22,7 +22,7 @@ class IndicatorResult:
 
 def calculate_rsi(prices: List[float], period: int = 14) -> float:
     """
-    Calculate Relative Strength Index
+    Calculate Relative Strength Index using Wilder's smoothing
     
     Args:
         prices: List of closing prices (oldest first)
@@ -34,28 +34,34 @@ def calculate_rsi(prices: List[float], period: int = 14) -> float:
     if len(prices) < period + 1:
         return 50.0  # Neutral if not enough data
     
-    prices_arr = np.array(prices)
+    prices_arr = np.array(prices, dtype=np.float64)
     deltas = np.diff(prices_arr)
     
-    gains = np.where(deltas > 0, deltas, 0)
-    losses = np.where(deltas < 0, -deltas, 0)
+    gains = np.maximum(deltas, 0)
+    losses = np.maximum(-deltas, 0)
     
-    # Use exponential moving average for smoothing
-    avg_gain = np.mean(gains[-period:])
-    avg_loss = np.mean(losses[-period:])
+    # Wilder's smoothed average
+    alpha = 1.0 / period
+    avg_gain = np.mean(gains[:period])
+    avg_loss = np.mean(losses[:period])
     
-    if avg_loss == 0:
+    # Smooth the rest
+    for i in range(period, len(gains)):
+        avg_gain = avg_gain * (1 - alpha) + gains[i] * alpha
+        avg_loss = avg_loss * (1 - alpha) + losses[i] * alpha
+    
+    if avg_loss < 1e-10:
         return 100.0
     
     rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
+    rsi = 100.0 - (100.0 / (1.0 + rs))
     
     return round(rsi, 2)
 
 
 def calculate_ema(prices: List[float], period: int = 20) -> float:
     """
-    Calculate Exponential Moving Average
+    Calculate Exponential Moving Average (vectorized)
     
     Args:
         prices: List of closing prices (oldest first)
@@ -67,17 +73,17 @@ def calculate_ema(prices: List[float], period: int = 20) -> float:
     if len(prices) < period:
         return prices[-1] if prices else 0.0
     
-    prices_arr = np.array(prices)
-    multiplier = 2 / (period + 1)
+    prices_arr = np.array(prices, dtype=np.float64)
+    alpha = 2.0 / (period + 1)
     
-    # Start with SMA
+    # Initialize with SMA
     ema = np.mean(prices_arr[:period])
     
-    # Calculate EMA
+    # Vectorized EMA calculation
     for price in prices_arr[period:]:
-        ema = (price - ema) * multiplier + ema
+        ema = price * alpha + ema * (1 - alpha)
     
-    return ema
+    return float(ema)
 
 
 def calculate_extension(current_price: float, ema: float) -> float:
@@ -201,7 +207,7 @@ def calculate_all_indicators(
     ema_period: int = 20
 ) -> IndicatorResult:
     """
-    Calculate all indicators at once
+    Calculate all indicators at once (optimized)
     
     Args:
         prices: Historical closing prices (oldest first)
@@ -213,7 +219,14 @@ def calculate_all_indicators(
     Returns:
         IndicatorResult with all calculated values
     """
-    current_price = prices[-1] if prices else 0.0
+    if not prices:
+        return IndicatorResult(
+            rsi=50.0, ema20=0.0, ema_extension_pct=0.0,
+            volume_ratio=1.0, momentum=0.0,
+            is_divergence=False, divergence_type=None
+        )
+    
+    current_price = prices[-1]
     
     # Calculate RSI
     rsi = calculate_rsi(prices, rsi_period)
@@ -228,13 +241,18 @@ def calculate_all_indicators(
     # Calculate momentum
     momentum = calculate_momentum(prices)
     
-    # Calculate RSI series for divergence detection
-    rsi_values = []
-    for i in range(max(0, len(prices) - 20), len(prices)):
-        rsi_values.append(calculate_rsi(prices[:i+1], rsi_period))
-    
-    # Detect divergence
-    is_div, div_type = detect_divergence(prices[-20:], rsi_values)
+    # Simplified divergence detection (only if enough data)
+    is_div, div_type = False, None
+    if len(prices) >= 20:
+        # Calculate RSI for last 20 periods efficiently
+        rsi_values = []
+        min_len = max(rsi_period + 1, 15)
+        for i in range(max(0, len(prices) - 20), len(prices)):
+            if i >= min_len:
+                rsi_values.append(calculate_rsi(prices[:i+1], rsi_period))
+        
+        if len(rsi_values) >= 10:
+            is_div, div_type = detect_divergence(prices[-len(rsi_values):], rsi_values)
     
     return IndicatorResult(
         rsi=rsi,

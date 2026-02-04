@@ -371,18 +371,60 @@ class SystemOrchestrator:
 
         await emit_pump_detected(symbol, pump_signal.price, pump_signal.price_change_pct, signal_type, score)
         
-        # Enhanced Analysis logic (simplified call)
-        # In a real perfect link, we'd delegate this back to SignalEngine
-        # But for now preserving logic:
-        # Import local to avoid circular dep if any
+        # Enhanced Analysis logic с умными уровнями
         from indicators import calculate_all_indicators
         history = self.pump_detector.history.get(symbol)
         if history:
+            # Записать свечи в smart_levels для анализа
+            ticker = self.client.tickers.get(symbol)
+            if ticker:
+                # Получить последние свечи для анализа
+                try:
+                    klines = await self.client.get_klines(symbol, 'Min1', 50)
+                    if klines:
+                        for kline in klines:
+                            self.smart_levels.record_candle(
+                                symbol=symbol,
+                                open_price=kline.open,
+                                high=kline.high,
+                                low=kline.low,
+                                close=kline.close,
+                                volume=kline.volume,
+                                timestamp=kline.timestamp
+                            )
+                except Exception as e:
+                    logger.debug(f"Could not fetch klines for {symbol}: {e}")
+            
             indicators = calculate_all_indicators(history.prices, history.volumes, history.volumes[-1])
             enhanced = await self.signal_engine.generate_signal(
                  symbol, pump_signal.price, pump_signal.price_change_pct, indicators, pump_signal.volume_usd
             )
             if enhanced:
+                # Рассчитать умные уровни (с order book)
+                smart_levels = await self.smart_levels.calculate_smart_levels(
+                    symbol=symbol,
+                    current_price=pump_signal.price,
+                    side='SHORT',  # Для пампов обычно шорт
+                    pump_size_pct=pump_signal.price_change_pct,
+                    client=self.client
+                )
+                
+                # Обновить уровни в сигнале если есть умные уровни
+                if smart_levels:
+                    enhanced.entry_price = smart_levels.entry_optimal
+                    enhanced.entry_zone_low = smart_levels.entry_zone_low
+                    enhanced.entry_zone_high = smart_levels.entry_zone_high
+                    enhanced.stop_loss = smart_levels.stop_loss
+                    enhanced.take_profit_1 = smart_levels.take_profit_1
+                    enhanced.take_profit_2 = smart_levels.take_profit_2
+                    # Сохранить smart_levels в сигнале для форматтера
+                    enhanced.smart_levels = smart_levels
+                    # Добавить информацию о паттернах
+                    if smart_levels.detected_patterns:
+                        enhanced.warnings.append(f"Паттерны: {', '.join(smart_levels.detected_patterns[:3])}")
+                    # Добавить предупреждения из smart_levels
+                    enhanced.warnings.extend(smart_levels.warnings)
+                
                 self.stats['signals_generated'] += 1
 
     async def _on_enhanced_signal(self, signal):

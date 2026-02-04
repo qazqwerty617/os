@@ -1,16 +1,15 @@
 """
-MEXC Pump Monitor - Whale Detection & Large Order Tracking
-Detects institutional/whale activity and large order flow
+MEXC Pump Monitor - Whale Detection
+Optimized large order tracking and institutional activity detection
 """
 
 import asyncio
 import time
 import logging
-from typing import Dict, List, Optional, Tuple, Set
+from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from collections import defaultdict, deque
 from enum import Enum
-import statistics
 
 logger = logging.getLogger(__name__)
 
@@ -22,11 +21,21 @@ class OrderSide(Enum):
 
 class WhaleCategory(Enum):
     """Whale size categories"""
-    SMALL_FISH = "SMALL_FISH"      # < $10k
-    DOLPHIN = "DOLPHIN"            # $10k - $50k
-    WHALE = "WHALE"                # $50k - $250k
-    MEGA_WHALE = "MEGA_WHALE"      # $250k - $1M
-    INSTITUTION = "INSTITUTION"    # > $1M
+    SMALL_FISH = "SMALL_FISH"      # <$10k
+    DOLPHIN = "DOLPHIN"            # $10k-$50k
+    WHALE = "WHALE"                # $50k-$250k
+    MEGA_WHALE = "MEGA_WHALE"      # $250k-$1M
+    INSTITUTION = "INSTITUTION"    # >$1M
+
+
+# Category thresholds (USD)
+CATEGORY_THRESHOLDS = [
+    (1_000_000, WhaleCategory.INSTITUTION),
+    (250_000, WhaleCategory.MEGA_WHALE),
+    (50_000, WhaleCategory.WHALE),
+    (10_000, WhaleCategory.DOLPHIN),
+    (0, WhaleCategory.SMALL_FISH),
+]
 
 
 @dataclass
@@ -39,13 +48,9 @@ class LargeOrder:
     quantity: float
     value_usd: float
     category: WhaleCategory
-    
-    # Market impact
     price_impact_pct: float = 0
-    
-    # Order book position
-    depth_level: int = 0  # How deep in order book
-    is_aggressive: bool = False  # Market order vs limit
+    depth_level: int = 0
+    is_aggressive: bool = False
 
 
 @dataclass
@@ -54,7 +59,6 @@ class WhaleActivity:
     symbol: str
     timestamp: int
     
-    # Order counts by category
     whale_buys: int = 0
     whale_sells: int = 0
     mega_whale_buys: int = 0
@@ -62,29 +66,20 @@ class WhaleActivity:
     institution_buys: int = 0
     institution_sells: int = 0
     
-    # Volume by side
     buy_volume_usd: float = 0
     sell_volume_usd: float = 0
-    
-    # Net flow
     net_flow_usd: float = 0
     
-    # Recent large orders
     recent_orders: List[LargeOrder] = field(default_factory=list)
-    
-    # Scores
-    whale_pressure_score: int = 50  # 0-100, >50 = buy pressure
+    whale_pressure_score: int = 50
     
     def calculate_pressure(self):
         """Calculate whale buying/selling pressure"""
         total_buys = self.whale_buys + self.mega_whale_buys * 2 + self.institution_buys * 5
         total_sells = self.whale_sells + self.mega_whale_sells * 2 + self.institution_sells * 5
         
-        if total_buys + total_sells == 0:
-            self.whale_pressure_score = 50
-        else:
-            self.whale_pressure_score = int((total_buys / (total_buys + total_sells)) * 100)
-        
+        total = total_buys + total_sells
+        self.whale_pressure_score = int((total_buys / total) * 100) if total > 0 else 50
         self.net_flow_usd = self.buy_volume_usd - self.sell_volume_usd
 
 
@@ -95,45 +90,25 @@ class AccumulationZone:
     price_low: float
     price_high: float
     total_volume_usd: float
-    buy_volume_pct: float  # Percentage of buys vs sells
-    is_accumulation: bool  # True = buying, False = distribution
-    strength: int  # 0-100
+    buy_volume_pct: float
+    is_accumulation: bool
+    strength: int
     first_seen: int
     last_seen: int
 
 
 class WhaleDetector:
     """
-    Whale detection and large order flow tracking
-    Identifies institutional activity and smart money flow
+    Optimized whale detection and large order tracking
     """
     
-    # Thresholds for whale categories (USD)
-    THRESHOLDS = {
-        WhaleCategory.SMALL_FISH: 10_000,
-        WhaleCategory.DOLPHIN: 50_000,
-        WhaleCategory.WHALE: 250_000,
-        WhaleCategory.MEGA_WHALE: 1_000_000,
-        WhaleCategory.INSTITUTION: float('inf')
-    }
-    
     def __init__(self):
-        # Order history per symbol
         self.order_history: Dict[str, deque] = defaultdict(lambda: deque(maxlen=1000))
-        
-        # Aggregated activity per symbol
         self.activity: Dict[str, WhaleActivity] = {}
-        
-        # Accumulation zones
         self.accumulation_zones: Dict[str, List[AccumulationZone]] = defaultdict(list)
-        
-        # Whale alerts
         self.alerts: deque = deque(maxlen=100)
-        
-        # Callbacks
         self._whale_callbacks: List = []
         
-        # Statistics
         self.stats = {
             'orders_tracked': 0,
             'whales_detected': 0,
@@ -141,21 +116,15 @@ class WhaleDetector:
         }
     
     def on_whale_detected(self, callback):
-        """Register callback for whale detection"""
         self._whale_callbacks.append(callback)
     
-    def classify_order(self, value_usd: float) -> WhaleCategory:
+    @staticmethod
+    def classify_order(value_usd: float) -> WhaleCategory:
         """Classify order by size"""
-        if value_usd < self.THRESHOLDS[WhaleCategory.SMALL_FISH]:
-            return WhaleCategory.SMALL_FISH
-        elif value_usd < self.THRESHOLDS[WhaleCategory.DOLPHIN]:
-            return WhaleCategory.DOLPHIN
-        elif value_usd < self.THRESHOLDS[WhaleCategory.WHALE]:
-            return WhaleCategory.WHALE
-        elif value_usd < self.THRESHOLDS[WhaleCategory.MEGA_WHALE]:
-            return WhaleCategory.MEGA_WHALE
-        else:
-            return WhaleCategory.INSTITUTION
+        for threshold, category in CATEGORY_THRESHOLDS:
+            if value_usd >= threshold:
+                return category
+        return WhaleCategory.SMALL_FISH
     
     async def process_trade(
         self,
@@ -165,13 +134,12 @@ class WhaleDetector:
         side: str,
         timestamp: int = None
     ):
-        """Process a trade and detect whale activity"""
+        """Process trade and detect whale activity"""
         timestamp = timestamp or int(time.time() * 1000)
         value_usd = price * quantity
         
         category = self.classify_order(value_usd)
         
-        # Skip small fish
         if category == WhaleCategory.SMALL_FISH:
             return
         
@@ -185,64 +153,60 @@ class WhaleDetector:
             quantity=quantity,
             value_usd=value_usd,
             category=category,
-            is_aggressive=True  # Assuming trades are aggressive
+            is_aggressive=True
         )
         
-        # Store order
         self.order_history[symbol].append(order)
         self.stats['orders_tracked'] += 1
         
-        # Update activity
         await self._update_activity(symbol, order)
         
-        # Track stats
-        if category in [WhaleCategory.WHALE, WhaleCategory.MEGA_WHALE]:
+        if category in (WhaleCategory.WHALE, WhaleCategory.MEGA_WHALE):
             self.stats['whales_detected'] += 1
         if category == WhaleCategory.INSTITUTION:
             self.stats['institutions_detected'] += 1
         
-        # Trigger callbacks for significant orders
-        if category in [WhaleCategory.MEGA_WHALE, WhaleCategory.INSTITUTION]:
+        if category in (WhaleCategory.MEGA_WHALE, WhaleCategory.INSTITUTION):
             await self._notify_whale(order)
     
     async def _update_activity(self, symbol: str, order: LargeOrder):
-        """Update aggregated activity for symbol"""
+        """Update aggregated activity"""
         if symbol not in self.activity:
             self.activity[symbol] = WhaleActivity(
                 symbol=symbol,
                 timestamp=int(time.time() * 1000)
             )
         
-        activity = self.activity[symbol]
-        activity.timestamp = int(time.time() * 1000)
+        a = self.activity[symbol]
+        a.timestamp = int(time.time() * 1000)
         
-        # Update counts
-        if order.side == OrderSide.BUY:
-            activity.buy_volume_usd += order.value_usd
+        is_buy = order.side == OrderSide.BUY
+        
+        if is_buy:
+            a.buy_volume_usd += order.value_usd
             if order.category == WhaleCategory.WHALE:
-                activity.whale_buys += 1
+                a.whale_buys += 1
             elif order.category == WhaleCategory.MEGA_WHALE:
-                activity.mega_whale_buys += 1
+                a.mega_whale_buys += 1
             elif order.category == WhaleCategory.INSTITUTION:
-                activity.institution_buys += 1
+                a.institution_buys += 1
         else:
-            activity.sell_volume_usd += order.value_usd
+            a.sell_volume_usd += order.value_usd
             if order.category == WhaleCategory.WHALE:
-                activity.whale_sells += 1
+                a.whale_sells += 1
             elif order.category == WhaleCategory.MEGA_WHALE:
-                activity.mega_whale_sells += 1
+                a.mega_whale_sells += 1
             elif order.category == WhaleCategory.INSTITUTION:
-                activity.institution_sells += 1
+                a.institution_sells += 1
         
-        # Keep recent orders
-        activity.recent_orders.append(order)
-        if len(activity.recent_orders) > 50:
-            activity.recent_orders = activity.recent_orders[-50:]
+        a.recent_orders.append(order)
+        if len(a.recent_orders) > 50:
+            a.recent_orders = a.recent_orders[-50:]
         
-        activity.calculate_pressure()
+        a.calculate_pressure()
     
     async def _notify_whale(self, order: LargeOrder):
-        """Notify callbacks about whale activity"""
+        """Notify callbacks"""
         for callback in self._whale_callbacks:
             try:
                 if asyncio.iscoroutinefunction(callback):
@@ -255,112 +219,83 @@ class WhaleDetector:
     def detect_accumulation_zones(
         self,
         symbol: str,
-        price_data: List[Tuple[float, float, str]],  # (price, volume, side)
+        price_data: List[Tuple[float, float, str]],
         num_zones: int = 5
     ) -> List[AccumulationZone]:
-        """
-        Detect accumulation/distribution zones from price data
-        
-        Args:
-            symbol: Trading pair
-            price_data: List of (price, volume_usd, side) tuples
-            num_zones: Number of zones to detect
-        
-        Returns:
-            List of detected zones
-        """
+        """Detect accumulation/distribution zones"""
         if len(price_data) < 10:
             return []
         
-        # Get price range
         prices = [p[0] for p in price_data]
-        min_price = min(prices)
-        max_price = max(prices)
+        min_price, max_price = min(prices), max(prices)
         price_range = max_price - min_price
         
         if price_range == 0:
             return []
         
-        # Divide into zones
         zone_size = price_range / num_zones
         zones = []
+        now = int(time.time() * 1000)
         
         for i in range(num_zones):
             zone_low = min_price + (i * zone_size)
             zone_high = min_price + ((i + 1) * zone_size)
             
-            # Calculate volume in zone
-            buy_volume = 0
-            sell_volume = 0
-            first_ts = None
-            last_ts = None
+            buy_volume = sum(v for p, v, s in price_data if zone_low <= p < zone_high and s.upper() == 'BUY')
+            sell_volume = sum(v for p, v, s in price_data if zone_low <= p < zone_high and s.upper() != 'BUY')
             
-            for price, volume, side in price_data:
-                if zone_low <= price < zone_high:
-                    if side.upper() == 'BUY':
-                        buy_volume += volume
-                    else:
-                        sell_volume += volume
-            
-            total_volume = buy_volume + sell_volume
-            if total_volume < 1000:  # Minimum $1000
+            total = buy_volume + sell_volume
+            if total < 1000:
                 continue
             
-            buy_pct = (buy_volume / total_volume) * 100 if total_volume > 0 else 50
-            is_accumulation = buy_pct > 55  # More buying than selling
+            buy_pct = (buy_volume / total) * 100
+            is_accumulation = buy_pct > 55
+            strength = min(100, int(abs(buy_pct - 50) * 2))
             
-            strength = int(abs(buy_pct - 50) * 2)  # 0-100
-            
-            zone = AccumulationZone(
+            zones.append(AccumulationZone(
                 symbol=symbol,
                 price_low=zone_low,
                 price_high=zone_high,
-                total_volume_usd=total_volume,
+                total_volume_usd=total,
                 buy_volume_pct=buy_pct,
                 is_accumulation=is_accumulation,
-                strength=min(100, strength),
-                first_seen=int(time.time() * 1000),
-                last_seen=int(time.time() * 1000)
-            )
-            zones.append(zone)
+                strength=strength,
+                first_seen=now,
+                last_seen=now
+            ))
         
-        # Sort by strength
         zones.sort(key=lambda z: z.strength, reverse=True)
-        
         self.accumulation_zones[symbol] = zones
         return zones
     
     def get_activity(self, symbol: str) -> Optional[WhaleActivity]:
-        """Get whale activity for symbol"""
         return self.activity.get(symbol)
     
     def get_top_whale_symbols(self, limit: int = 20) -> List[Tuple[str, WhaleActivity]]:
         """Get symbols with most whale activity"""
-        sorted_activity = sorted(
+        return sorted(
             self.activity.items(),
             key=lambda x: x[1].buy_volume_usd + x[1].sell_volume_usd,
             reverse=True
-        )
-        return sorted_activity[:limit]
+        )[:limit]
     
     def get_buy_pressure_symbols(self, min_pressure: int = 70) -> List[Tuple[str, WhaleActivity]]:
         """Get symbols with high whale buy pressure"""
-        high_pressure = [
-            (s, a) for s, a in self.activity.items()
-            if a.whale_pressure_score >= min_pressure
-        ]
-        return sorted(high_pressure, key=lambda x: x[1].whale_pressure_score, reverse=True)
+        return sorted(
+            [(s, a) for s, a in self.activity.items() if a.whale_pressure_score >= min_pressure],
+            key=lambda x: x[1].whale_pressure_score,
+            reverse=True
+        )
     
     def get_sell_pressure_symbols(self, max_pressure: int = 30) -> List[Tuple[str, WhaleActivity]]:
         """Get symbols with high whale sell pressure (good for shorts)"""
-        low_pressure = [
-            (s, a) for s, a in self.activity.items()
-            if a.whale_pressure_score <= max_pressure
-        ]
-        return sorted(low_pressure, key=lambda x: x[1].whale_pressure_score)
+        return sorted(
+            [(s, a) for s, a in self.activity.items() if a.whale_pressure_score <= max_pressure],
+            key=lambda x: x[1].whale_pressure_score
+        )
     
     def get_recent_whale_orders(self, limit: int = 50) -> List[LargeOrder]:
-        """Get most recent whale orders across all symbols"""
+        """Get most recent whale orders"""
         all_orders = []
         for orders in self.order_history.values():
             all_orders.extend(orders)

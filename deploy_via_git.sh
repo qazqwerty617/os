@@ -21,14 +21,25 @@ ssh root@$SERVER_IP "
     fi
 
     # Clone or Pull
-    if [ ! -d $REMOTE_DIR ]; then
+    if [ ! -d "$REMOTE_DIR" ]; then
         echo '📂 Cloning repository...'
         git clone $REPO_URL $REMOTE_DIR
     else
         echo '🔄 Updating repository...'
         cd $REMOTE_DIR
-        git reset --hard
-        git pull
+        
+        # Handle migration from non-git folder
+        if [ ! -d ".git" ]; then
+            echo '⚠️  Converting to Git repo...'
+            git init
+            git remote add origin $REPO_URL
+            git fetch --all
+            git reset --hard origin/main
+            git branch -M main
+        else
+            git reset --hard
+            git pull
+        fi
     fi
     
     # 2. Rebuild & Restart
