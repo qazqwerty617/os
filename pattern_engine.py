@@ -165,8 +165,9 @@ class PatternRecognition:
         current_price = recent[-1].price
         peak_price = max(p.price for p in recent)
         
+        from config import config
         peak_change = ((peak_price - start_price) / start_price) * 100
-        if peak_change < 10:
+        if peak_change < config.pump.min_price_change_pct:
             return None
         
         # Volume profile
@@ -363,11 +364,10 @@ class SmartFilter:
         if symbol in self.blacklist:
             return False, "blacklisted"
         
-        # МИНИМАЛЬНЫЙ фильтр по объему (только совсем мертвые токены)
-        if volume_24h < self.volume_thresholds['small']:
-            # Но если цена выросла сильно (>20%), пропускаем даже с низким объемом
-            if price_change < 20:
-                return False, "low_volume"
+        # МИНИМАЛЬНЫЙ фильтр по объему - DISABLED for pure price mode
+        # if volume_24h < self.volume_thresholds['small']:
+        #     if price_change < 20:
+        #         return False, "low_volume"
         
         # Анти-спам: максимум 10 пампов в час (было 5)
         if self._is_spam(symbol):

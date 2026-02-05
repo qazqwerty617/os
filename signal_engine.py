@@ -6,7 +6,7 @@ Optimized signal generation with all analysis modules
 import asyncio
 import time
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from enum import Enum
 

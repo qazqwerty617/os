@@ -60,42 +60,34 @@ class ShortEntry:
     leverage_recommended: int = 1
     confidence: int = 50
     
+    # Additional fields for Telegram formatting
+    rsi: float = 0
+    oi: float = 0
+    reason: str = ""
+    
     def format_telegram(self) -> str:
         """Format for Telegram"""
-        risk_emoji = "🟢" if self.risk_reward_ratio >= 3 else "🟡" if self.risk_reward_ratio >= 2 else "🔴"
         price = self.current_price
         
         return f"""
-🎯 <b>SHORT SIGNAL: {self.symbol}</b>
+📉 <b>SHORT SETUP: {self.symbol}</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 <b>EXITS:</b>
+├ 📈 Entry: <b>{self.entry_ideal:.6f}</b>
+├ 🛑 Stop: <b>{self.stop_loss:.6f}</b>
+├ 💹 TP1 (EMA20): <b>{self.tp1:.6f}</b>
+└ 💹 TP2 (EMA50): <b>{self.tp2:.6f}</b>
 
-💰 <b>Current Price:</b> ${price:.8f}
+📊 <b>TECHNICALS:</b>
+├ 📉 RSI: <b>{self.rsi:.1f}</b>
+├ 📈 OI: <b>{self.oi:,.0f}</b>
+└ 📝 REASON: <b>{self.reason}</b>
 
-📍 <b>ENTRY ZONE:</b>
-├ 🎯 Ideal: ${self.entry_ideal:.8f}
-├ 📉 Min: ${self.entry_zone_low:.8f}
-└ 📈 Max: ${self.entry_zone_high:.8f}
-
-🛑 <b>STOP-LOSS:</b>
-├ 🔴 Tight: ${self.stop_loss_tight:.8f} ({((self.stop_loss_tight/price-1)*100):+.1f}%)
-├ 🟡 Normal: ${self.stop_loss:.8f} ({((self.stop_loss/price-1)*100):+.1f}%)
-└ 🟢 Wide: ${self.stop_loss_wide:.8f} ({((self.stop_loss_wide/price-1)*100):+.1f}%)
-
-🎁 <b>TAKE-PROFITS:</b>
-├ TP1: ${self.tp1:.8f} ({((self.tp1/price-1)*100):+.1f}%) — 30%
-├ TP2: ${self.tp2:.8f} ({((self.tp2/price-1)*100):+.1f}%) — 40%
-└ TP3: ${self.tp3:.8f} ({((self.tp3/price-1)*100):+.1f}%) — 30%
-
-{risk_emoji} <b>R:R:</b> 1:{self.risk_reward_ratio:.1f}
-├ 📉 Risk: {self.risk_pct:.1f}%
-└ 📈 Potential: {self.reward_pct:.1f}%
-
-⚙️ <b>RECOMMENDATIONS:</b>
+⚙️ <b>EXECUTION:</b>
+├ ⚖️ Risk/Reward: 1:{self.risk_reward_ratio:.1f}
 ├ 📊 Size: {self.position_size_pct:.0f}% of deposit
 ├ 💪 Leverage: {self.leverage_recommended}x
 └ 🎯 Confidence: {self.confidence}%
-
-👉 <a href="https://futures.mexc.com/exchange/{self.symbol}_USDT"><b>OPEN SHORT ({self.symbol})</b></a>
 """.strip()
 
 
@@ -154,6 +146,117 @@ class ShortEntryCalculator:
     def __init__(self):
         self.stats = {'entries_calculated': 0}
     
+    async def analyze_orderbook(self, client, symbol: str, current_price: float) -> tuple[bool, float]:
+        """
+        Analyze orderbook for resistance above current price.
+        
+        Returns:
+            (has_resistance, density_boost) - density_boost is 0-15 confidence
+        """
+        try:
+            # Fetch orderbook from client
+            orderbook = await client.get_order_book(symbol, depth=20)
+            if not orderbook or 'asks' not in orderbook:
+                return False, 0
+            
+            asks = orderbook.get('asks', [])
+            if not asks:
+                return False, 0
+            
+            # Calculate density above current price (resistance)
+            # asks format: [[price, quantity], ...]
+            resistance_zone = current_price * 1.02  # 2% above
+            total_qty = 0
+            resistance_qty = 0
+            
+            for price_str, qty_str in asks[:20]:
+                price = float(price_str)
+                qty = float(qty_str)
+                total_qty += qty
+                
+                if price <= resistance_zone:
+                    resistance_qty += qty
+            
+            if total_qty == 0:
+                return False, 0
+            
+            # Calculate density ratio
+            density_pct = (resistance_qty / total_qty) * 100
+            
+            # Boost confidence if high resistance
+            if density_pct >= 60:  # 60%+ of asks in resistance zone
+                return True, 15  # Strong resistance → +15 confidence
+            elif density_pct >= 40:
+                return True, 10  # Medium resistance → +10 confidence
+            elif density_pct >= 25:
+                return True, 5   # Weak resistance → +5 confidence
+            
+            return False, 0
+            
+        except Exception as e:
+            logger.debug(f"Orderbook analysis error for {symbol}: {e}")
+            return False, 0
+    
+    def analyze_pump(
+        self,
+        symbol: str,
+        current_price: float,
+        rsi: float = 50,
+        volume_spike: float = 0,
+        price_change: float = 0,
+        oi: float = 0,
+        reason: str = ""
+    ) -> Dict:
+        """Compatibility method for SystemOrchestrator"""
+        # HARD FILTER: RSI minimum 65
+        if rsi < 65:
+            logger.debug(f"Blocked SHORT {symbol}: RSI {rsi:.1f} < 65 (not overbought)")
+            return {
+                'recommendation': 'SKIP',
+                'confidence': 0,
+                'reason': f'RSI too low ({rsi:.1f} < 65)'
+            }
+        
+        # Determine internal reasoning if not provided
+        if not reason:
+            if rsi > 75:
+                reason = "Overbought (RSI > 75)"
+            elif oi > 1000000:
+                reason = "High Open Interest Spike"
+            else:
+                reason = "Technical Fade (No News)"
+
+        # Call modern calculation
+        entry_data = self.calculate_entry(
+            symbol=symbol,
+            current_price=current_price,
+            ema20=current_price * 0.98,
+            ema50=current_price * 0.95,
+            rsi=rsi,
+            atr=current_price * 0.02,
+            volume_ratio=2.0 if volume_spike > 0 else 1.0,
+            price_change_pct=price_change or 5.0,
+            oi=oi,
+            reason=reason
+        )
+        
+        # HARD FILTER: Minimum confidence 60%
+        if entry_data.confidence < 60:
+            logger.debug(f"Blocked SHORT {symbol}: confidence {entry_data.confidence}% < 60%")
+            return {
+                'recommendation': 'SKIP',
+                'confidence': entry_data.confidence,
+                'reason': f'Low confidence ({entry_data.confidence}%)'
+            }
+        
+        return {
+            'recommendation': 'SHORT',
+            'entry_price': entry_data.entry_ideal,
+            'stop_loss': entry_data.stop_loss,
+            'confidence': entry_data.confidence,
+            'raw': entry_data
+        }
+    
     def calculate_entry(
         self,
         symbol: str,
@@ -165,7 +268,9 @@ class ShortEntryCalculator:
         volume_ratio: float,
         price_change_pct: float,
         support_level: float = 0,
-        manipulation_confidence: int = 0
+        manipulation_confidence: int = 0,
+        oi: float = 0,
+        reason: str = ""
     ) -> ShortEntry:
         """Calculate optimal short entry points"""
         now = int(time.time() * 1000)
@@ -195,27 +300,35 @@ class ShortEntryCalculator:
         # Confidence calculation
         confidence = 50
         
+        # RSI boost (stricter thresholds)
         for threshold, boost in self.RSI_BOOSTS:
             if rsi >= threshold:
                 confidence += boost
                 break
         
+        # Volume boost
         for threshold, boost in self.VOLUME_BOOSTS:
             if volume_ratio >= threshold:
                 confidence += boost
                 break
         
+        # Price change boost
         for threshold, boost in self.CHANGE_BOOSTS:
             if price_change_pct >= threshold:
                 confidence += boost
                 break
         
+        # Manipulation boost
         for threshold, boost in self.MANIP_BOOSTS:
             if manipulation_confidence >= threshold:
                 confidence += boost
                 break
         
-        confidence = min(100, confidence)
+        # OI penalty if no data
+        if oi == 0 and rsi < 75:
+            confidence -= 15  # Uncertainty penalty
+        
+        confidence = min(100, max(0, confidence))
         
         # Position sizing
         position_size, leverage = 3, 1
@@ -252,7 +365,10 @@ class ShortEntryCalculator:
             reward_pct=reward_pct,
             position_size_pct=position_size,
             leverage_recommended=leverage,
-            confidence=confidence
+            confidence=confidence,
+            oi=oi,
+            reason=reason,
+            rsi=rsi
         )
 
 
@@ -433,7 +549,8 @@ class TelegramAlertFormatter:
         price_change_pct: float,
         volume_ratio: float,
         score: int,
-        rsi: float
+        rsi: float,
+        market_cap: str = "N/A"
     ) -> str:
         """Pump detected alert"""
         if price_change_pct >= 20:
@@ -455,6 +572,7 @@ class TelegramAlertFormatter:
 📊 <b>METRICS:</b>
 ├ 📈 Change: <b>{price_change_pct:+.1f}%</b>
 ├ 📊 Volume: <b>×{volume_ratio:.1f}</b>
+├ 💎 Cap: <b>{market_cap}</b>
 ├ 📉 RSI: <b>{rsi:.0f}</b>
 └ 🎯 Score: <b>{score}/100</b>
 
@@ -468,7 +586,9 @@ class TelegramAlertFormatter:
         price: float,
         buy_sell_ratio: float,
         confidence: int,
-        phase: str
+        phase: str,
+        oi: float = 0,
+        reason: str = "Technical overextension"
     ) -> str:
         """Distribution detected alert (SHORT signal)"""
         if phase == "DUMPING":

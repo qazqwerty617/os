@@ -867,7 +867,7 @@ class SmartLevelsCalculator:
             return
         
         # 1. Свечные паттерны
-                from candlestick_patterns import CandlestickPatternDetector
+        from candlestick_patterns import CandlestickPatternDetector
         
         candle_detector = CandlestickPatternDetector()
         candles = [

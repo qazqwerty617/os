@@ -363,7 +363,17 @@ class MEXCClient:
             logger.debug(f"Orderbook fetch failed for {symbol}: {e}")
             return None
     
-    def get_active_symbols(self) -> List[str]:
+    async def get_open_interest(self, symbol: str) -> float:
+        """Get open interest for a symbol"""
+        endpoint = f'/api/v1/contract/open_interest/{symbol}'
+        data = await self._request('GET', endpoint)
+        
+        if data and data.get('success', False):
+            oi_data = data.get('data', {})
+            return float(oi_data.get('openInterest', 0) or 0)
+        return 0.0
+    
+    def get_active_symbols(self) -> List[str] :
         """Get list of active trading symbols"""
         return list(self.symbols.keys())
     

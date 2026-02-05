@@ -27,6 +27,7 @@ class PumpSignal:
     price: float
     price_change_pct: float
     price_5min_ago: float
+    time_window_min: int
     
     # Volume info
     volume_ratio: float
@@ -98,10 +99,20 @@ class PriceHistory:
     max_length: int = 500
     
     def add(self, price: float, volume: float, timestamp: int):
-        """Add new data point"""
-        self.prices.append(price)
-        self.volumes.append(volume)
-        self.timestamps.append(timestamp)
+        """Add new data point (aggregates same minute)"""
+        # Convert to start of minute for aggregation
+        minute_ts = (timestamp // 60000) * 60000
+        
+        if self.timestamps and (self.timestamps[-1] // 60000) * 60000 == minute_ts:
+            # Update last point
+            self.prices[-1] = price
+            self.volumes[-1] += volume  # Accumulate volume
+            self.timestamps[-1] = timestamp
+        else:
+            # Add new point
+            self.prices.append(price)
+            self.volumes.append(volume)
+            self.timestamps.append(timestamp)
         
         # Trim to max length
         if len(self.prices) > self.max_length:
@@ -169,6 +180,10 @@ class PumpDetector:
             'signals_generated': 0,
             'start_time': time.time()
         }
+        
+        # Track last volume to calculate deltas
+        self.last_vol_24h: Dict[str, float] = {}
+        self.last_tickers_ts: Dict[str, int] = {}
     
     def on_signal(self, callback):
         """Register callback for new signals"""
@@ -226,12 +241,22 @@ class PumpDetector:
     async def _scan_loop(self):
         """Aggressive REST polling loop - MEMECOIN OPTIMIZED (ultra-fast)"""
         logger.info("📡 REST polling loop started (MEMECOIN MODE - 0.5s interval)")
+        heartbeat_time = time.time()
+        scan_count = 0
         
         while True:
             try:
                 start = time.time()
                 await self._full_scan()
                 elapsed = time.time() - start
+                scan_count += 1
+                
+                # Heartbeat каждые 30 минут (1800 сек)
+                if time.time() - heartbeat_time >= 1800:
+                    pumps_detected = len(self.pump_history) if hasattr(self, 'pump_history') else 0
+                    logger.info(f"🚀 PUMP DETECTOR ALIVE | Scans: {scan_count} | Pumps: {pumps_detected} | Symbols: {len(self.client.symbols)}")
+                    heartbeat_time = time.time()
+                    scan_count = 0
                 
                 # ULTRA-AGGRESSIVE polling: 0.5 second interval для мемкоинов
                 sleep_time = max(0.05, 0.5 - elapsed)
@@ -246,18 +271,40 @@ class PumpDetector:
         tickers = await self.client.get_tickers()
         
         for ticker in tickers:
+            # Calculate volume since last scan
+            prev_vol = self.last_vol_24h.get(ticker.symbol, 0)
+            
+            if prev_vol > 0:
+                # Delta volume between two snapshots
+                current_vol = max(0, ticker.volume_24h - prev_vol)
+            else:
+                # Fallback to average on first scan (but divide by 60 to simulate a 1s slice)
+                current_vol = ticker.volume_24h / 1440 / 60
+            
+            self.last_vol_24h[ticker.symbol] = ticker.volume_24h
+            self.last_tickers_ts[ticker.symbol] = ticker.timestamp
+            
             self.history[ticker.symbol].add(
                 price=ticker.price,
-                volume=ticker.volume_24h / 1440,
+                volume=current_vol,
                 timestamp=ticker.timestamp
             )
-            await self._check_pump(ticker.symbol)
+            
+            # Use normalized rate for immediate detection
+            if prev_vol > 0:
+                prev_ts = self.last_tickers_ts.get(ticker.symbol, ticker.timestamp - 1000)
+                elapsed_min = max(0.01, (ticker.timestamp - prev_ts) / 60000)
+                current_vol_rate = current_vol / elapsed_min
+            else:
+                current_vol_rate = ticker.volume_24h / 1440
+                
+            await self._check_pump(ticker.symbol, current_vol_rate=current_vol_rate)
             self.stats['total_checked'] += 1
     
-    async def _check_pump(self, symbol: str):
-        """Check if symbol is pumping"""
+    async def _check_pump(self, symbol: str, current_vol_rate: float = 0):
+        """Check if symbol is pumping - PRICE ONLY MODE"""
         history = self.history.get(symbol)
-        if not history or len(history.prices) < 20:
+        if not history or len(history.prices) < 2: # Min 2 points (1 min diff)
             return
         
         # Check cooldown
@@ -272,6 +319,9 @@ class PumpDetector:
         )
         
         # Check minimum pump threshold
+        if price_change >= 1.0:
+            logger.debug(f"🔍 Checking {symbol}: +{price_change:.2f}%")
+            
         if price_change < self.config.pump.min_price_change_pct:
             return
         
@@ -279,43 +329,36 @@ class PumpDetector:
         indicators = calculate_all_indicators(
             prices=history.prices,
             volumes=history.volumes,
-            current_volume=history.volumes[-1] if history.volumes else 0
+            current_volume=current_vol_rate or history.volumes[-1]
         )
         
-        # Check volume confirmation - ЛЕГЧЕ для мемкоинов
-        # Используем минимум из конфига или 2.0 (для мемкоинов)
-        min_vol_mult = min(self.config.pump.min_volume_multiplier, 2.0)
-        if indicators.volume_ratio < min_vol_mult:
-            return
-        
-        # RSI check - ЛЕГЧЕ для мемкоинов (могут памповать с более низким RSI)
-        # Для мемкоинов используем более низкий порог
-        rsi_threshold = max(self.config.pump.rsi_overbought - 5, 70.0)  # Минимум 70
-        if indicators.rsi < rsi_threshold:
-            return
+        # RSI check - DISABLED for pure price mode
+        # rsi_threshold = max(self.config.pump.rsi_overbought - 5, 60.0)
+        # if indicators.rsi < rsi_threshold:
+        #     logger.debug(f"⏭️ Skipped {symbol}: Low RSI {indicators.rsi:.1f} < {rsi_threshold}")
+        #     return
         
         self.stats['pumps_detected'] += 1
         
-        # Calculate score
+        # Calculate score (kept for info only, no longer blocks)
         score, breakdown = self._calculate_score(indicators, price_change)
         
-        # Check minimum score threshold - СНИЖЕН для мемкоинов
-        # Для мемкоинов используем более низкий порог (60 вместо 70)
-        min_score = min(self.config.scoring.min_score_threshold, 60)
-        if score < min_score:
-            return
+        # Check minimum score threshold - DISABLED for pure price mode
+        # min_score = min(self.config.scoring.min_score_threshold, 50)
+        # if score < min_score:
+        #     logger.debug(f"⏭️ Skipped {symbol}: Low score {score} < {min_score}")
+        #     return
         
         # Get volume USD estimate
         ticker = self.client.tickers.get(symbol)
         volume_usd = ticker.volume_24h * ticker.price if ticker else 0
         
-        # Apply volume filters - ЛЕГЧЕ для мемкоинов
-        # Если цена выросла сильно (>30%), пропускаем даже с низким объемом
-        if volume_usd < self.config.filters.min_daily_volume_usd:
-            if price_change < 30:  # Только если не мега-памп
-                return
-        if volume_usd > self.config.filters.max_daily_volume_usd:
-            return
+        # Daily volume filters - DISABLED for pure price mode
+        # if volume_usd < self.config.filters.min_daily_volume_usd:
+        #     if price_change < 30:
+        #         return
+        # if volume_usd > self.config.filters.max_daily_volume_usd:
+        #     return
         
         # Create signal
         signal = PumpSignal(
@@ -324,6 +367,7 @@ class PumpDetector:
             price=history.prices[-1],
             price_change_pct=price_change,
             price_5min_ago=history.prices[-1] / (1 + price_change / 100),
+            time_window_min=self.config.pump.time_window_minutes,
             volume_ratio=indicators.volume_ratio,
             volume_usd=volume_usd,
             rsi=indicators.rsi,

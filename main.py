@@ -26,10 +26,11 @@ async def run_monitor_only(args):
     """Run only the monitor (no dashboard)"""
     orchestrator = SystemOrchestrator(capital=args.capital, risk_level=args.risk)
     
-    # Signal handling
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, lambda: asyncio.create_task(orchestrator.stop()))
+    # Signal handling (Windows compatible)
+    if sys.platform != 'win32':
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, lambda: asyncio.create_task(orchestrator.stop()))
         
     await orchestrator.start()
 
@@ -60,8 +61,11 @@ async def run_with_dashboard(args):
         await orchestrator.stop()
         server.should_exit = True
     
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, lambda: asyncio.create_task(shutdown()))
+    # Handle shutdown (Windows compatible)
+    if sys.platform != 'win32':
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, lambda: asyncio.create_task(shutdown()))
         
     try:
         # Run both

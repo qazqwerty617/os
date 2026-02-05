@@ -63,7 +63,8 @@ echo -e "Dashboard: http://localhost:8000"
 echo -e "----------------------------------------------------"
 
 # Run Main
-$PYTHON_CMD main.py
+echo -e "🤖 Starting with AGGRESSIVE mode..."
+$PYTHON_CMD main.py --mode both --risk aggressive
 
 # Exit handler
 echo -e "${CYAN}System shutdown complete.${NC}"

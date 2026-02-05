@@ -118,6 +118,18 @@ class NewListingsDetector:
         
         self._running = False
     
+    def is_recent_listing(self, symbol: str, window_hours: int = 24) -> bool:
+        """Check if symbol was recently listed"""
+        cutoff = int(time.time() * 1000) - (window_hours * 3600 * 1000)
+        # Check new_listings dict
+        if symbol in self.new_listings:
+            return True
+        # Check recent_listings list
+        for listing in self.recent_listings:
+            if listing.symbol == symbol and listing.detected_at > cutoff:
+                return True
+        return False
+    
     def on_new_listing(self, callback: Callable):
         """Register callback for new listings"""
         self._callbacks.append(callback)
@@ -658,10 +670,12 @@ class TokenomicsFetcher:
         ),
     }
     
+    _coin_id_cache: Dict[str, str] = {} # Class-level cache for symbol -> coin_id
+    
     def __init__(self):
         self._session: Optional[aiohttp.ClientSession] = None
         self._cache: Dict[str, TokenInfo] = {}
-        self._cache_ttl = 300  # 5 minutes
+        self._cache_ttl = 1800  # 30 minutes (longer cache for tokenomics)
         self._cache_times: Dict[str, float] = {}
     
     async def start(self):
@@ -720,27 +734,47 @@ class TokenomicsFetcher:
             await self.start()
         
         try:
-            # Search for coin
-            search_url = f"{self.COINGECKO_API}/search?query={symbol}"
-            async with self._session.get(search_url) as resp:
-                if resp.status != 200:
-                    return None
-                
-                data = await resp.json()
-                coins = data.get('coins', [])
-                
-                if not coins:
-                    return None
-                
-                # Find best match
-                coin_id = None
-                for coin in coins:
-                    if coin.get('symbol', '').upper() == symbol.upper():
-                        coin_id = coin.get('id')
-                        break
-                
-                if not coin_id:
-                    coin_id = coins[0].get('id')
+            # 1. Check ID cache first
+            coin_id = self._coin_id_cache.get(symbol.upper())
+            
+            if not coin_id:
+                # 2. Search for coin
+                search_url = f"{self.COINGECKO_API}/search?query={symbol}"
+                async with self._session.get(search_url) as resp:
+                    if resp.status == 429:
+                        logger.warning(f"⚠️ CoinGecko Rate Limited (429) for {symbol}")
+                        return None
+                    if resp.status != 200:
+                        return None
+                    
+                    data = await resp.json()
+                    coins = data.get('coins', [])
+                    
+                    if not coins:
+                        logger.debug(f"🔍 No CoinGecko results for {symbol}")
+                        return None
+                    
+                    # Exact symbol match
+                    for coin in coins:
+                        if coin.get('symbol', '').upper() == symbol.upper():
+                            coin_id = coin.get('id')
+                            break
+                    
+                    # Fuzzy match fallback (if symbol is part of the name or vice versa)
+                    if not coin_id:
+                        for coin in coins[:3]: # Check top 3 results
+                            if symbol.upper() in coin.get('name', '').upper():
+                                coin_id = coin.get('id')
+                                break
+                    
+                    if not coin_id:
+                        coin_id = coins[0].get('id')
+                        
+                if coin_id:
+                    self._coin_id_cache[symbol.upper()] = coin_id
+
+            if not coin_id:
+                return None
             
             # Get detailed info
             coin_url = f"{self.COINGECKO_API}/coins/{coin_id}"

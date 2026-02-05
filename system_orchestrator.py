@@ -65,6 +65,8 @@ from market_heatmap import MarketHeatMap
 from advanced_pattern_scanner import AdvancedPatternScanner
 from profit_maximizer import ProfitMaximizer
 from hedge_manager import HedgeManager
+from smart_levels import SmartLevelsCalculator
+from global_listings import GlobalListingWatcher
 
 logger = logging.getLogger("Orchestrator")
 
@@ -143,6 +145,8 @@ class SystemOrchestrator:
         self.pattern_scanner_v2 = AdvancedPatternScanner()
         self.profit_maximizer = ProfitMaximizer(self.client, self.risk_manager, self.telegram)
         self.hedge_manager = HedgeManager(self.client, self.telegram)
+        self.smart_levels = SmartLevelsCalculator()
+        self.global_listings = GlobalListingWatcher()
         
         # Link providers to commands
         self.telegram_commands.stats_provider = lambda: self.statistics_provider()
@@ -186,13 +190,13 @@ class SystemOrchestrator:
         # 2. Connect to Exchange
         logger.info("📡 Connecting to MEXC API...")
         await self.client.start()
-        await self.client.connect_websocket()
         
         # 3. Start Monitors
         logger.info("🔍 Starting Detectors...")
         await self.market_analyzer.start()
         await self.pump_detector.start()
         await self.listings_detector.start()
+        await self.global_listings.start()
         await self.tokenomics.start()
         await self.contract_scanner.start()
         await self.economic_calendar.start()
@@ -262,7 +266,7 @@ class SystemOrchestrator:
         
         # Stop Monitors
         modules_to_stop = [
-            self.market_analyzer, self.listings_detector, self.tokenomics,
+            self.market_analyzer, self.listings_detector, self.global_listings, self.tokenomics,
             self.contract_scanner, self.economic_calendar, self.news_bot,
             self.contract_scanner, self.economic_calendar, self.news_bot,
             self.mobile_dashboard, self.health_monitor, self.telegram_commands
@@ -291,7 +295,75 @@ class SystemOrchestrator:
         logger.info(f"🎯 PUMP: {symbol} +{pump_signal.price_change_pct:.1f}%")
         self.smart_filter.record_pump(symbol)
         
-        # 🚨 IMMEDIATE PUMP ALERT (Before Analysis)
+        # 💎 Fetch Market Cap
+        base_asset = symbol.split('_')[0] if '_' in symbol else symbol.replace('USDT', '')
+        mcap_str = "Unavailable"
+        token_info = await self.tokenomics.get_tokenomics(base_asset)
+        if token_info and token_info.market_cap > 0:
+            if token_info.market_cap >= 1_000_000_000:
+                mcap_str = f"${token_info.market_cap / 1_000_000_000:.1f}B"
+            elif token_info.market_cap >= 1_000_000:
+                mcap_str = f"${token_info.market_cap / 1_000_000:.1f}M"
+            else:
+                mcap_str = f"${token_info.market_cap:,.0f}"
+        
+        # 🆕 Check Multi-Exchange Listings & Get Prices
+        is_new_listing, new_listing_details = self.global_listings.is_new_listing(symbol, max_age_hours=24)
+        other_prices = await self.global_listings.get_prices(symbol)
+        
+        # 📊 Format price comparison
+        price_comparison = ""
+        if other_prices:
+            price_lines = []
+            for ex, price in other_prices.items():
+                if price > 0:
+                    diff_pct = ((pump_signal.price - price) / price) * 100
+                    price_lines.append(f"• {ex}: ${price:.6f} ({diff_pct:+.1f}%)")
+            if price_lines:
+                price_comparison = "\n📊 <b>Other Exchanges / Другие биржи:</b>\n" + "\n".join(price_lines) + "\n"
+        
+        # 🧠 Check for news
+        news = self.news_bot.get_news_by_token(symbol)
+        recent_news = [n for n in news if (time.time() * 1000 - n.timestamp) < 3600000]  # Last 1 hour
+        
+        # 📌 Determine pump reason
+        pump_reason_block = ""
+        pump_reason_type = "UNKNOWN"
+        
+        if is_new_listing and new_listing_details:
+            # NEW LISTING - highest priority
+            pump_reason_type = "NEW_LISTING"
+            exchanges_list = []
+            for ex, age_h in new_listing_details:
+                if age_h < 1:
+                    exchanges_list.append(f"{ex} ({age_h*60:.0f} мин)")
+                else:
+                    exchanges_list.append(f"{ex} ({age_h:.1f}ч)")
+            
+            pump_reason_block = f"""
+📌 <b>Причина пампа / Pump Reason:</b>
+├ 🆕 <b>НОВЫЙ ЛИСТИНГ / NEW LISTING</b>
+├ 📍 Биржи: {', '.join(exchanges_list)}
+└ ⚠️ <b>Очень высокий риск для шорта!</b>
+"""
+        elif recent_news:
+            # NEWS CATALYST
+            pump_reason_type = "NEWS"
+            top_news = recent_news[0]
+            pump_reason_block = f"""
+📌 <b>Причина пампа / Pump Reason:</b>
+├ 🗞️ <b>НОВОСТЬ / NEWS</b>
+└ 📰 {top_news.title[:80]}...
+"""
+        else:
+            # UNKNOWN - no facts
+            pump_reason_type = "UNKNOWN"
+            pump_reason_block = """
+📌 <b>Причина пампа / Pump Reason:</b>
+└ ❓ <b>Без факторов / No catalyst found</b>
+"""
+
+        # 🚨 IMMEDIATE PUMP ALERT
         instant_msg = f"""
 🚨 <b>PUMP DETECTED / ПАМП ОБНАРУЖЕН</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -299,22 +371,18 @@ class SystemOrchestrator:
 📈 <b>Change / Изменение:</b> +{pump_signal.price_change_pct:.1f}%
 ⏱️ <b>Time / Время:</b> {pump_signal.time_window_min} мин
 💰 <b>Volume / Объём:</b> ${pump_signal.volume_usd:,.0f}
+💎 <b>Market Cap / Капитализация:</b> {mcap_str}
 📊 <b>Price / Цена:</b> ${pump_signal.price:.6f}
-
+{price_comparison}{pump_reason_block}
 🔍 <i>Analyzing entry... / Анализируем вход...</i>
-
-👉 <a href="https://futures.mexc.com/exchange/{symbol}"><b>VIEW CHART / СМОТРЕТЬ ГРАФИК</b></a>
 """
         await self.telegram.send_message(instant_msg)
         
-        # 🧠 AI FUSION: Check for Fundamental Catalysts
-        news = self.news_bot.get_news_by_token(symbol)
-        recent_news = [n for n in news if (time.time() * 1000 - n.timestamp) < 3600000] # Last 1 hour only
-        
+        # 🧠 AI FUSION: Use already determined pump reason
         signal_type = 'STRONG'
         score = pump_signal.score
         
-        if recent_news:
+        if pump_reason_type == "NEWS" and recent_news:
             # We have a catalyst! LONG MODE 🚀
             top_news = recent_news[0]
             logger.info(f"🚀 FUNDAMENTAL CATALYST: {symbol} triggered by news: {top_news.title}")
@@ -327,10 +395,9 @@ class SystemOrchestrator:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 🪙 <b>Token / Токен:</b> #{symbol}
 📈 <b>Price / Цена:</b> +{pump_signal.price_change_pct:.1f}%
+💎 <b>Market Cap / Капа:</b> {mcap_str}
 🗞️ <b>Catalyst / Катализатор:</b> {top_news.title}
 🎯 <b>Confidence / Уверенность:</b> {score}/100
-
-👉 <a href="https://futures.mexc.com/exchange/{symbol}_USDT"><b>TRADE {symbol} ON MEXC</b></a>
 """
             await self.telegram.send_message(msg)
             
@@ -342,32 +409,38 @@ class SystemOrchestrator:
             logger.info(f"🔧 TECHNICAL PUMP (NO NEWS): {symbol} -> Preparing SHORT")
             signal_type = 'TECHNICAL_PUMP_FADE'
             
+            # Calculate real RSI and fetch OI
+            rsi_val = 50.0
+            oi_val = 0.0
+            history = self.pump_detector.history.get(symbol)
+            if history and len(history.prices) >= 14:
+                from indicators import calculate_all_indicators
+                indicators = calculate_all_indicators(history.prices, history.volumes, history.volumes[-1])
+                rsi_val = indicators.rsi
+            
+            try:
+                oi_val = await self.client.get_open_interest(symbol)
+            except Exception as e:
+                logger.debug(f"Failed to fetch OI for {symbol}: {e}")
+
             # Calculate Short Entry
             short_analysis = self.short_calc.analyze_pump(
                 symbol=symbol,
                 current_price=pump_signal.price,
-                rsi=70, # Mock, ideally fetch real RSI
-                volume_spike=pump_signal.volume_usd
+                rsi=rsi_val,
+                volume_spike=pump_signal.volume_usd,
+                price_change=pump_signal.price_change_pct,
+                oi=oi_val,
+                reason="New Listing Pump (EXTREME RISK)" if is_new_listing else ""
             )
             
             if short_analysis and short_analysis.get('recommendation') == 'SHORT':
-                 entry = short_analysis.get('entry_price')
-                 sl = short_analysis.get('stop_loss')
-                 
-                 msg = f"""
-📉 <b>SHORT OPPORTUNITY (AI) / ШОРТ ВОЗМОЖНОСТЬ</b>
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🪙 <b>Token / Токен:</b> #{symbol}
-📝 <b>Reason / Причина:</b> Pump without News (Fade) / Памп без новостей
-📉 <b>Entry / Вход:</b> {entry}
-🛑 <b>SL / Стоп:</b> {sl}
-
-👉 <a href="https://futures.mexc.com/exchange/{symbol}_USDT"><b>SHORT {symbol} ON MEXC</b></a>
-"""
+                 entry_obj = short_analysis.get('raw')
+                 msg = entry_obj.format_telegram()
                  await self.telegram.send_message(msg)
                  
                  # Emit as SHORT signal
-                 await emit_signal(symbol, 'A_TIER', 80, entry, sl, entry*0.95)
+                 await emit_signal(symbol, 'A_TIER', 80, entry_obj.entry_ideal, entry_obj.stop_loss, entry_obj.tp1)
 
         await emit_pump_detected(symbol, pump_signal.price, pump_signal.price_change_pct, signal_type, score)
         

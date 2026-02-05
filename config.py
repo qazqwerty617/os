@@ -19,59 +19,61 @@ if env_path.exists():
                 os.environ[key.strip()] = value.strip()
 
 
+
+
 @dataclass
 class PumpConfig:
     """Pump detection thresholds - MEMECOIN OPTIMIZED"""
     
-    # Multi-tier pump detection - оптимизировано для мемкоинов
+    # Multi-tier pump detection - ТОЛЬКО МЕГА-ПАМПЫ
     pump_tiers: dict = field(default_factory=lambda: {
-        'MEGA': {'min_pct': 100.0, 'time_min': 10, 'priority': 1},  # 100%+ за 10 мин
-        'MASSIVE': {'min_pct': 30.0, 'time_min': 5, 'priority': 2},  # 30%+ за 5 мин
-        'STRONG': {'min_pct': 10.0, 'time_min': 3, 'priority': 3},  # 10%+ за 3 мин
-        'EARLY': {'min_pct': 3.0, 'time_min': 1, 'priority': 4},     # 3%+ за 1 мин - РАННЕЕ ОБНАРУЖЕНИЕ
+        'MEGA': {'min_pct': 50.0, 'time_min': 30, 'priority': 1},    # 50%+ за 30 мин
+        'MASSIVE': {'min_pct': 20.0, 'time_min': 15, 'priority': 2}, # 20%+ за 15 мин
+        'STRONG': {'min_pct': 10.0, 'time_min': 5, 'priority': 3},   # 10%+ за 5 мин
+        'EARLY': {'min_pct': 8.0, 'time_min': 3, 'priority': 4},     # 8%+ за 3 мин
     })
     
-    # Main thresholds - АГРЕССИВНО для мемкоинов
-    min_price_change_pct: float = 3.0  # 3% минимум (было 1%)
-    time_window_minutes: int = 3  # 3 минуты окно (было 5)
+    # Main thresholds - ТОЛЬКО МЕГА-ПАМПЫ
+    min_price_change_pct: float = 8.0  # 8% минимум (EARLY tier)
+    time_window_minutes: int = 3       # 3 минуты
     
     # Micro-pump detection (catch the start) - СУПЕР РАННЕЕ
-    micro_pump_pct: float = 1.5  # 1.5% для раннего обнаружения
+    micro_pump_pct: float = 1.0  # 1.0% для раннего обнаружения
     micro_pump_window: int = 1   # 1 минута окно
     
     # Volume confirmation - ЛЕГЧЕ для мемкоинов
-    min_volume_multiplier: float = 2.0   # 200% среднего (было 500%)
-    extreme_volume_multiplier: float = 5.0  # 500% = MEGA pump (было 1000%)
-    volume_avg_period_minutes: int = 30  # 30 минут средний объем (было 60)
+    min_volume_multiplier: float = 1.2   # 120% среднего (было 2.0)
+    extreme_volume_multiplier: float = 3.0  # 300% = MEGA pump (было 5.0)
+    volume_avg_period_minutes: int = 60  # 60 минут средний объем (было 30)
     
     # Trade count (anti-manipulation)
-    min_trades_multiplier: float = 3.0  # 300% of average trades
+    min_trades_multiplier: float = 1.5  # 150% of average trades
     
     # RSI thresholds - ОПТИМИЗИРОВАНО для мемкоинов
     rsi_period: int = 14
-    rsi_overbought: float = 75.0   # Ниже порог для мемкоинов (было 80)
-    rsi_extreme: float = 85.0      # Экстремальная зона (было 90)
-    rsi_signal_zone: float = 80.0  # Лучшая зона для шорта (было 85)
+    rsi_overbought: float = 65.0   # Ниже порог (было 75)
+    rsi_extreme: float = 80.0      # Экстремальная зона (было 85)
+    rsi_signal_zone: float = 75.0  # Лучшая зона (было 80)
     
     # Multi-timeframe
     timeframes: tuple = ('Min1', 'Min5', 'Min15', 'Hour1')
     
     # Open Interest spike detection
-    oi_spike_multiplier: float = 2.0  # 200% OI increase = significant
+    oi_spike_multiplier: float = 1.5  # 150% OI increase
     
     # Funding rate extremes
-    funding_rate_extreme: float = 0.1  # 0.1% = extremely high funding
+    funding_rate_extreme: float = 0.05  # 0.05%
 
 
 @dataclass
 class ScoringConfig:
     """Signal scoring configuration"""
-    min_score_threshold: int = 70  # Minimum score to generate alert
+    min_score_threshold: int = 30  # СНИЖЕН порог (был 50)
     
     # RSI scoring
-    rsi_excellent: float = 85.0  # Score 100
-    rsi_good: float = 75.0  # Score 70
-    rsi_weak: float = 65.0  # Score 40
+    rsi_excellent: float = 80.0  # Score 100
+    rsi_good: float = 70.0  # Score 70
+    rsi_weak: float = 60.0  # Score 40
     
     # Extension from EMA20
     extension_excellent_pct: float = 8.0
@@ -87,21 +89,20 @@ class ScoringConfig:
 class FilterConfig:
     """Signal filtering rules - OPTIMIZED FOR MEMECOINS"""
     # Exclude new listings (reduced for memecoins)
-    min_listing_days: int = 1  # Мемкоины могут быть новыми
+    min_listing_days: int = 0  # Разрешить даже самые новые
     
     # Volume filters (daily USD) - ЛЕГКИЕ для мемкоинов
-    min_daily_volume_usd: float = 50_000  # $50K minimum (было $1M)
-    max_daily_volume_usd: float = 500_000_000  # $500M maximum (увеличено для топ мемкоинов)
+    min_daily_volume_usd: float = 10_000  # $10K minimum (было $50K)
+    max_daily_volume_usd: float = 1_000_000_000  # $1B maximum
     
     # Exclude stable coins and specific tokens
     excluded_symbols: tuple = (
         'USDT', 'USDC', 'BUSD', 'DAI', 'TUSD',  # Stablecoins
-        'BTCUSDT',  # Too stable for pumps
     )
     
     # Memecoin specific settings
-    allow_low_volume: bool = True  # Разрешить низкий объем для мемкоинов
-    min_volume_multiplier: float = 2.0  # Минимум 2x среднего объема (было 5x)
+    allow_low_volume: bool = True
+    min_volume_multiplier: float = 1.2  # Минимум 1.2x среднего объема
 
 
 @dataclass
@@ -121,6 +122,8 @@ class MEXCConfig:
     # Polling intervals
     pump_scan_interval: float = 1.0  # Pump detection scan every 1 sec
     market_scan_interval: float = 2.0  # General market scan every 2 sec
+    polling_interval: float = 0.5  # Polling interval for aggressive mode
+    use_rest_aggressive: bool = True  # Force aggressive REST polling mode
     
     def __post_init__(self):
         self.api_key = os.getenv('MEXC_API_KEY')
@@ -141,14 +144,24 @@ class TelegramConfig:
 
 
 @dataclass
-class DeepSeekConfig:
-    """DeepSeek API configuration"""
+class OpenRouterConfig:
+    """OpenRouter AI configuration (Free Models)"""
     api_key: Optional[str] = None
-    base_url: str = "https://api.deepseek.com/v1"
-    model: str = "deepseek-chat"
+    base_url: str = "https://openrouter.ai/api/v1"
+    model: str = "google/gemini-2.0-flash-exp"
     
     def __post_init__(self):
-        self.api_key = os.getenv('DEEPSEEK_API_KEY')
+        self.api_key = os.getenv('OPENROUTER_API_KEY')
+
+@dataclass
+class GroqConfig:
+    """Groq AI configuration (FREE, FAST)"""
+    api_key: Optional[str] = None
+    base_url: str = "https://api.groq.com/openai/v1"
+    model: str = "llama-3.3-70b-versatile"  # FREE, fast, accurate
+    
+    def __post_init__(self):
+        self.api_key = os.getenv('GROQ_API_KEY')
 
 @dataclass
 class DashboardConfig:
@@ -171,7 +184,9 @@ class Config:
         self.filters = FilterConfig()
         self.mexc = MEXCConfig()
         self.telegram = TelegramConfig()
-        self.deepseek = DeepSeekConfig()
+        self.openrouter = OpenRouterConfig()
+        self.groq = GroqConfig()
+        self.dashboard = DashboardConfig()
         self.dashboard = DashboardConfig()
         
         # Logging
