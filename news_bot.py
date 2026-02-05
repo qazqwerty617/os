@@ -122,6 +122,8 @@ class NewsBot:
         NewsSource.WATCHER_GURU: "https://watcher.guru/news/feed", # Direct fast news
     }
     
+    SEEN_IDS_FILE = "data/seen_news_ids.json"
+    
     def __init__(self, telegram=None):
         self.telegram = telegram
         self._session: Optional[aiohttp.ClientSession] = None
@@ -130,8 +132,8 @@ class NewsBot:
         self.news: List[NewsItem] = []
         self.max_news = 500
         
-        # Seen news (to avoid duplicates)
-        self._seen_ids: set = set()
+        # Seen news (to avoid duplicates) - load from disk
+        self._seen_ids: set = self._load_seen_ids()
         
         # Callbacks
         self._callbacks: List[Callable] = []
@@ -144,6 +146,29 @@ class NewsBot:
         }
         
         self._running = False
+    
+    def _load_seen_ids(self) -> set:
+        """Load seen news IDs from disk to prevent duplicates after restart"""
+        import os
+        if os.path.exists(self.SEEN_IDS_FILE):
+            try:
+                with open(self.SEEN_IDS_FILE, 'r') as f:
+                    data = json.load(f)
+                    # Keep only last 1000 IDs to prevent file bloat
+                    return set(data[-1000:] if len(data) > 1000 else data)
+            except Exception as e:
+                logger.debug(f"Could not load seen IDs: {e}")
+        return set()
+    
+    def _save_seen_ids(self):
+        """Save seen news IDs to disk"""
+        import os
+        os.makedirs(os.path.dirname(self.SEEN_IDS_FILE), exist_ok=True)
+        try:
+            with open(self.SEEN_IDS_FILE, 'w') as f:
+                json.dump(list(self._seen_ids)[-1000:], f)  # Keep last 1000
+        except Exception as e:
+            logger.debug(f"Could not save seen IDs: {e}")
     
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get aiohttp session"""
@@ -178,6 +203,7 @@ class NewsBot:
         while self._running:
             try:
                 await self._fetch_all_sources()
+                self._save_seen_ids()  # Persist seen IDs to disk
                 heartbeat_counter += 1
                 # Heartbeat каждые 30 минут (30 итераций по 60 сек)
                 if heartbeat_counter >= 30:
@@ -877,6 +903,8 @@ JSON ONLY."""
 🔒 <b>Достоверность:</b> {reliability}/100
 
 🔗 <a href="{news.url}">Читать оригинал</a>
+{trade_link}
+""" if news.url else f"""
 {trade_link}
 """
         
