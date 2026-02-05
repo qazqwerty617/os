@@ -27,6 +27,7 @@ class GlobalListingWatcher:
         self.check_interval = check_interval
         self._session: Optional[aiohttp.ClientSession] = None
         self._running = False
+        self._is_first_run = True  # Flag to handle first scan properly
         
         # Structure: { symbol: { exchange: first_seen_timestamp } }
         self.listings: Dict[str, Dict[str, int]] = {}
@@ -39,6 +40,8 @@ class GlobalListingWatcher:
                 with open(self.PERSISTENCE_FILE, 'r') as f:
                     self.listings = json.load(f)
                 logger.info(f"📁 Loaded {len(self.listings)} symbols from global listings cache.")
+                # Cache exists = not first run, enable real-time new listing detection
+                self._is_first_run = False
             except Exception as e:
                 logger.error(f"Error loading global listings: {e}")
                 self.listings = {}
@@ -104,6 +107,10 @@ class GlobalListingWatcher:
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
         now = int(time.time() * 1000)
+    
+        # On first run, use old timestamp (7 days ago) for existing symbols
+        # This prevents false "NEW LISTING" alerts for already-listed coins
+        discovery_time = now if not self._is_first_run else now - (7 * 24 * 3600 * 1000)
         
         for idx, symbols in enumerate(results):
             if isinstance(symbols, Exception):
@@ -117,8 +124,15 @@ class GlobalListingWatcher:
                     self.listings[sym_upper] = {}
                 
                 if exchange_name not in self.listings[sym_upper]:
-                    self.listings[sym_upper][exchange_name] = now
-                    logger.debug(f"✨ New discovery: {sym_upper} on {exchange_name}")
+                    # Use discovery_time: now for real new listings, old for first run
+                    self.listings[sym_upper][exchange_name] = discovery_time
+                    if not self._is_first_run:
+                        logger.info(f"✨ NEW LISTING: {sym_upper} on {exchange_name}")
+        
+        # Mark first run as complete
+        if self._is_first_run:
+            self._is_first_run = False
+            logger.info(f"📊 Initial scan complete: {len(self.listings)} symbols indexed")
 
     def check_token(self, symbol: str) -> Dict[str, str]:
         """
