@@ -815,15 +815,21 @@ JSON ONLY."""
                         
                     return json.loads(content)
                 else:
-                    logger.debug(f"Groq error: {resp.status}")
+                    logger.warning(f"⚠️ Groq API Error: {resp.status}")
+                    try:
+                        err_data = await resp.json()
+                        logger.error(f"Groq Detail: {err_data}")
+                    except:
+                        pass
                     return None
+
                     
         except Exception as e:
             logger.debug(f"Groq failed: {e}")
             return None
 
     async def _translate_text(self, text: str) -> str:
-        """Translate text to Russian using OpenRouter (Fallback)"""
+        """Translate text to Russian using Groq (Fallback)"""
         try:
             if not config.groq.api_key: return text
             
@@ -831,23 +837,23 @@ JSON ONLY."""
             
             headers = {
                 "Authorization": f"Bearer {config.groq.api_key}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "http://localhost:8080",
-                "X-Title": "MEXC Pump Monitor"
+                "Content-Type": "application/json"
             }
             data = {
-                "model": config.openrouter.model,
+                "model": config.groq.model,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.1
             }
             
             session = await self._get_session()
-            async with session.post(f"{config.openrouter.base_url}/chat/completions", headers=headers, json=data, timeout=10) as resp:
+            async with session.post(f"{config.groq.base_url}/chat/completions", headers=headers, json=data, timeout=10) as resp:
                 if resp.status == 200:
                     res_json = await resp.json()
                     translation = res_json['choices'][0]['message']['content'].strip()
                     # Remove quotes or markdown if present
                     translation = translation.replace('"', '').replace('«', '').replace('»', '')
+                    return translation
+
                     return translation
                 return text
         except Exception:
@@ -885,8 +891,12 @@ JSON ONLY."""
         else:
             primary_token = None
         
-        # Russian title from AI (no extra API call!)
-        ru_title = ai_data.get('ru_title', news.title)
+        # Russian title from AI (with fallback)
+        ru_title = ai_data.get('ru_title')
+        if not ru_title or ru_title == news.title:
+            logger.info(f"🔄 Translating news: {news.title[:40]}...")
+            ru_title = await self._translate_text(news.title)
+
         
         # Category
         category = ai_data.get('category', 'other').upper()

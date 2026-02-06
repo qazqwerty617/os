@@ -104,7 +104,7 @@ def main():
     parser = argparse.ArgumentParser(description='MEXC Pump Monitor - Genius Edition')
     parser.add_argument('--mode', choices=['monitor', 'dashboard', 'both', 'backtest'], default='both')
     parser.add_argument('--port', type=int, default=config.dashboard.port)
-    parser.add_argument('--capital', type=float, default=10000)
+    parser.add_argument('--capital', type=float, default=100.0)
     parser.add_argument('--risk', choices=['conservative', 'moderate', 'aggressive', 'degen'], default='moderate')
     parser.add_argument('--debug', action='store_true')
     

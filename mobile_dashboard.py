@@ -448,7 +448,7 @@ MOBILE_DASHBOARD_HTML = '''
         let currentTab = 'Dashboard';
         let data = {
             pnl: { today: 0, allTime: 0, trades: 0 },
-            stats: { pumps: 0, signals: 0, winrate: 0, balance: 10000 },
+            stats: { pumps: 0, signals: 0, winrate: 0, balance: 100 },
             signals: [],
             news: []
         };
@@ -625,7 +625,7 @@ class MobileDashboard:
                 'pumps': 0,
                 'signals': 0,
                 'winrate': 0,
-                'balance': 10000,
+                'balance': 100,
                 'totalTrades': 0,
                 'wins': 0,
                 'losses': 0,

@@ -296,7 +296,7 @@ class AutoTrader:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 💰 <b>BALANCE:</b>
-├ Initial: $100
+├ Initial: ${self.INITIAL_BALANCE:,.0f}
 ├ Current: ${self.demo_balance:,.2f}
 └ {pnl_emoji} P&L: ${self.demo_pnl:+,.2f}
 
