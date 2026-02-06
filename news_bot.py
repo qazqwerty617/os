@@ -138,6 +138,7 @@ class NewsBot:
         # Callbacks
         self._callbacks: List[Callable] = []
         self._ai_lock = asyncio.Semaphore(1) # Strict queue for AI requests
+        self._key_index = 0  # Round-robin index for multiple keys
         
         # Stats
         self.stats = {
@@ -685,6 +686,14 @@ class NewsBot:
 
         return min(100, max(0, importance))
 
+    def _get_current_key(self) -> Optional[str]:
+        """Get the next API key in the rotation"""
+        if not config.groq.api_keys:
+            return None
+        key = config.groq.api_keys[self._key_index % len(config.groq.api_keys)]
+        self._key_index += 1
+        return key
+
     async def _analyze_with_groq(self, title: str, summary: str, tokens: List[str]) -> Optional[Dict]:
         """
         Analyze news with IDEAL FILTERS:
@@ -695,11 +704,13 @@ class NewsBot:
         """
         async with self._ai_lock:
             try:
-                if not config.groq.api_key:
+                api_key = self._get_current_key()
+                if not api_key:
                     return None
                 
-                # Anti-spam delay to stay under TPM limits (6000 TPM = ~10 news/min)
-                await asyncio.sleep(5.0)
+                # Anti-spam delay to stay under TPM limits (6000 TPM = ~10 news/min per key)
+                # Reduced delay since we have more keys
+                await asyncio.sleep(2.0 if len(config.groq.api_keys) > 1 else 5.0)
                 
                 prompt = f"""You are a professional crypto news analyst. Analyze this news.
 
@@ -761,7 +772,7 @@ JSON ONLY. BE ULTRA-CONSERVATIVE. IF NOT 100% SURE, LOWER THE RELIABILITY AND IM
                 async with session.post(
                     f"{config.groq.base_url}/chat/completions",
                     headers={
-                        "Authorization": f"Bearer {config.groq.api_key}",
+                        "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json"
                     },
                     json={
@@ -847,15 +858,16 @@ JSON ONLY. BE ULTRA-CONSERVATIVE. IF NOT 100% SURE, LOWER THE RELIABILITY AND IM
         """Translate text to Russian using Groq (Fallback)"""
         async with self._ai_lock:
             try:
-                if not config.groq.api_key: return text
+                api_key = self._get_current_key()
+                if not api_key: return text
                 
                 # Anti-spam delay
-                await asyncio.sleep(2.0)
+                await asyncio.sleep(1.0 if len(config.groq.api_keys) > 1 else 2.0)
                 
                 prompt = f"Translate this crypto news headline to professional Russian. Only return the translation, no extra text:\n\n{text}"
                 
                 headers = {
-                    "Authorization": f"Bearer {config.groq.api_key}",
+                    "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json"
                 }
                 data = {

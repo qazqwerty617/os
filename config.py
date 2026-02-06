@@ -156,12 +156,15 @@ class OpenRouterConfig:
 @dataclass
 class GroqConfig:
     """Groq AI configuration (FREE, FAST)"""
-    api_key: Optional[str] = None
+    api_keys: List[str] = field(default_factory=list)
     base_url: str = "https://api.groq.com/openai/v1"
     model: str = "llama-3.1-8b-instant"  # HIGHER LIMITS, ultra-fast for news translation
     
     def __post_init__(self):
-        self.api_key = os.getenv('GROQ_API_KEY')
+        # Load multiple keys separated by comma
+        raw_keys = os.getenv('GROQ_API_KEY', '')
+        if raw_keys:
+            self.api_keys = [k.strip() for k in raw_keys.split(',') if k.strip()]
 
 @dataclass
 class DashboardConfig:

@@ -64,7 +64,10 @@ class GlobalListingWatcher:
         ssl_context.check_hostname = False
         ssl_context.verify_mode = ssl.CERT_NONE
         connector = aiohttp.TCPConnector(ssl=ssl_context)
-        self._session = aiohttp.ClientSession(connector=connector)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
+        self._session = aiohttp.ClientSession(connector=connector, headers=headers)
         self._running = True
         
         # Initial scan
