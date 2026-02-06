@@ -115,15 +115,15 @@ class MEXCConfig:
     api_key: Optional[str] = None
     api_secret: Optional[str] = None
     
-    # Rate limiting - 20 requests/sec
-    max_requests_per_second: int = 20
-    request_interval: float = 0.05
+    # Rate limiting - 50 requests/sec (Optimized for 8GB/4-core)
+    max_requests_per_second: int = 50
+    request_interval: float = 0.02
     
-    # Polling intervals
-    pump_scan_interval: float = 1.0  # Pump detection scan every 1 sec
-    market_scan_interval: float = 2.0  # General market scan every 2 sec
-    polling_interval: float = 0.5  # Polling interval for aggressive mode
-    use_rest_aggressive: bool = True  # Force aggressive REST polling mode
+    # Polling intervals - ULTRA-FAST
+    pump_scan_interval: float = 0.1  # 10 scans per second
+    market_scan_interval: float = 1.0
+    polling_interval: float = 0.1
+    use_rest_aggressive: bool = True
     
     def __post_init__(self):
         self.api_key = os.getenv('MEXC_API_KEY')

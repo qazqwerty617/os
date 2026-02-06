@@ -128,9 +128,9 @@ class NewsBot:
         self.telegram = telegram
         self._session: Optional[aiohttp.ClientSession] = None
         
-        # News storage
+        # News storage (Optimized for 8GB RAM)
         self.news: List[NewsItem] = []
-        self.max_news = 500
+        self.max_news = 2000  # Previously 500
         
         # Seen news (to avoid duplicates) - load from disk
         self._seen_ids: set = self._load_seen_ids()
@@ -164,9 +164,9 @@ class NewsBot:
         """Save seen news IDs to disk"""
         import os
         
-        # Trim in-memory set to prevent memory leak
-        if len(self._seen_ids) > 2000:
-            self._seen_ids = set(list(self._seen_ids)[-1000:])
+        # Trim in-memory set to prevent memory leak, but allow more for large RAM
+        if len(self._seen_ids) > 5000:
+            self._seen_ids = set(list(self._seen_ids)[-3000:])
         
         os.makedirs(os.path.dirname(self.SEEN_IDS_FILE), exist_ok=True)
         try:

@@ -96,7 +96,7 @@ class PriceHistory:
     prices: List[float] = field(default_factory=list)
     volumes: List[float] = field(default_factory=list)
     timestamps: List[int] = field(default_factory=list)
-    max_length: int = 500
+    max_length: int = 3000  # ~50 hours of 1m context (Optimized for 8GB RAM)
     
     def add(self, price: float, volume: float, timestamp: int):
         """Add new data point (aggregates same minute)"""
@@ -258,8 +258,8 @@ class PumpDetector:
                     heartbeat_time = time.time()
                     scan_count = 0
                 
-                # ULTRA-AGGRESSIVE polling: 0.5 second interval для мемкоинов
-                sleep_time = max(0.05, 0.5 - elapsed)
+                # ULTRA-AGGRESSIVE polling: 0.1 second interval (10 scans per second)
+                sleep_time = max(0.01, 0.1 - elapsed)
                 await asyncio.sleep(sleep_time)
                 
             except Exception as e:
