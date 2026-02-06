@@ -137,6 +137,7 @@ class NewsBot:
         
         # Callbacks
         self._callbacks: List[Callable] = []
+        self._ai_lock = asyncio.Semaphore(1) # Strict queue for AI requests
         
         # Stats
         self.stats = {
@@ -685,11 +686,15 @@ class NewsBot:
         3. Crypto Relevance
         4. Actionability Score
         """
-        try:
-            if not config.groq.api_key:
-                return None
-            
-            prompt = f"""You are a professional crypto news analyst. Analyze this news.
+        async with self._ai_lock:
+            try:
+                if not config.groq.api_key:
+                    return None
+                
+                # Anti-spam delay to stay under TPM limits (6000 TPM = ~10 news/min)
+                await asyncio.sleep(5.0)
+                
+                prompt = f"""You are a professional crypto news analyst. Analyze this news.
 
 TITLE: {title}
 SUMMARY: {summary}
@@ -814,16 +819,16 @@ JSON ONLY."""
                         if tokens and result.get('is_actionable') and rel >= 60:
                             result['importance'] = min(100, result['importance'] + 10)
                         
-                        logger.debug(f"✅ {title[:35]}... | {orig}→{result['importance']} | rel:{rel}")
-                        return result
-                        
-                    return json.loads(content)
-                else:
-                    if resp.status == 429:
-                        logger.warning("⏳ Groq Rate Limit (429). Retrying in 3s...")
-                        await asyncio.sleep(3.0) # Simple retry logic handled in loop usually, but here we just wait
+                            logger.debug(f"✅ {title[:35]}... | {orig}→{result['importance']} | rel:{rel}")
+                            return result
+                            
+                        return json.loads(content)
                     else:
-                        logger.warning(f"⚠️ Groq API Error: {resp.status}")
+                        if resp.status == 429:
+                            logger.warning("⏳ Groq Rate Limit (429). Waiting 10s...")
+                            await asyncio.sleep(10.0)
+                        else:
+                            logger.warning(f"⚠️ Groq API Error: {resp.status}")
                     
                     try:
                         err_data = await resp.json()
@@ -840,20 +845,13 @@ JSON ONLY."""
 
     async def _translate_text(self, text: str) -> str:
         """Translate text to Russian using Groq (Fallback)"""
-        try:
-            if not config.groq.api_key: return text
-            
-            prompt = f"Translate this crypto news headline to professional Russian. Only return the translation, no extra text:\n\n{text}"
-            
-            headers = {
-                "Authorization": f"Bearer {config.groq.api_key}",
-                "Content-Type": "application/json"
-            }
-            data = {
                 "model": config.groq.model,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.1
             }
+            
+            # Anti-spam delay
+            await asyncio.sleep(0.5)
             
             session = await self._get_session()
             async with session.post(f"{config.groq.base_url}/chat/completions", headers=headers, json=data, timeout=10) as resp:
