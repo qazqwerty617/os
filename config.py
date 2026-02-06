@@ -5,7 +5,7 @@ All settings for pump detection, scoring, and notifications
 
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, List
 from pathlib import Path
 
 # Load environment variables from .env
