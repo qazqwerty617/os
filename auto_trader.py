@@ -89,7 +89,7 @@ class AutoTrader:
     Real trading requires API keys
     """
     
-    INITIAL_BALANCE = 10000
+    INITIAL_BALANCE = 100  # Demo balance
     
     def __init__(
         self,
@@ -296,7 +296,7 @@ class AutoTrader:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 💰 <b>BALANCE:</b>
-├ Initial: $10,000
+├ Initial: $100
 ├ Current: ${self.demo_balance:,.2f}
 └ {pnl_emoji} P&L: ${self.demo_pnl:+,.2f}
 

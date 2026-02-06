@@ -163,6 +163,11 @@ class NewsBot:
     def _save_seen_ids(self):
         """Save seen news IDs to disk"""
         import os
+        
+        # Trim in-memory set to prevent memory leak
+        if len(self._seen_ids) > 2000:
+            self._seen_ids = set(list(self._seen_ids)[-1000:])
+        
         os.makedirs(os.path.dirname(self.SEEN_IDS_FILE), exist_ok=True)
         try:
             with open(self.SEEN_IDS_FILE, 'w') as f:

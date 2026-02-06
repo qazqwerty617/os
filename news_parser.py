@@ -305,6 +305,13 @@ class CryptoNewsParser:
         )
         
         self.news_cache[news.news_id] = news
+        
+        # Prevent memory leak - limit cache size
+        if len(self.news_cache) > 500:
+            oldest_ids = list(self.news_cache.keys())[:-500]
+            for old_id in oldest_ids:
+                del self.news_cache[old_id]
+        
         self.stats['news_parsed'] += 1
         
         if signal in [NewsSignal.STRONG_LONG, NewsSignal.LONG]:
@@ -422,6 +429,10 @@ class CryptoNewsParser:
                 continue
             
             self.processed_ids.add(news_id)
+            
+            # Limit processed_ids to prevent memory leak
+            if len(self.processed_ids) > 5000:
+                self.processed_ids = set(list(self.processed_ids)[-5000:])
             
             # Анализировать
             news = self.analyze_news(news_data)

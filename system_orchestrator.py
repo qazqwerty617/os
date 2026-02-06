@@ -439,6 +439,18 @@ class SystemOrchestrator:
                  msg = entry_obj.format_telegram()
                  await self.telegram.send_message(msg)
                  
+                 # AUTO DEMO TRADE: Place short order
+                 await self.auto_trader.place_short_order(
+                     symbol=symbol,
+                     entry_price=entry_obj.entry_ideal,
+                     stop_loss=entry_obj.stop_loss,
+                     take_profit1=entry_obj.tp1,
+                     take_profit2=entry_obj.tp2 if hasattr(entry_obj, 'tp2') else entry_obj.tp1 * 0.95,
+                     leverage=entry_obj.leverage_recommended if hasattr(entry_obj, 'leverage_recommended') else 3,
+                     confidence=entry_obj.confidence if hasattr(entry_obj, 'confidence') else 70,
+                     signal_source="PUMP_FADE"
+                 )
+                 
                  # Emit as SHORT signal
                  await emit_signal(symbol, 'A_TIER', 80, entry_obj.entry_ideal, entry_obj.stop_loss, entry_obj.tp1)
 
@@ -639,8 +651,16 @@ class SystemOrchestrator:
 
     async def _position_monitor_loop(self):
         while self.is_running:
+            prices = {t.symbol: t.price for t in self.client.tickers.values()}
+            
+            # Update risk manager positions
             if self.risk_manager.positions:
-                self.risk_manager.update_positions({t.symbol: t.price for t in self.client.tickers.values()})
+                self.risk_manager.update_positions(prices)
+            
+            # Update auto_trader demo positions (check SL/TP)
+            if self.auto_trader.positions:
+                await self.auto_trader.update_positions(prices)
+            
             await asyncio.sleep(5)
             
     async def _regime_update_loop(self):
