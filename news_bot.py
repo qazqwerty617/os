@@ -428,7 +428,7 @@ class NewsBot:
                         importance = 50
                         ru_title = title
                         
-                        if config.groq.api_key:
+                        if config.groq.api_keys:
                             ai_analysis = await self._analyze_with_groq(title, "", tokens)
                             if ai_analysis:
                                 sentiment = NewsSentiment(ai_analysis['sentiment'])
@@ -497,8 +497,8 @@ class NewsBot:
                 if self._is_noise(title):
                     continue
                 
-                # Use OpenRouter if enabled
-                if config.groq.api_key:
+                # Use Groq if enabled
+                if config.groq.api_keys:
                     ai_analysis = await self._analyze_with_groq(title, description, tokens)
                     if ai_analysis:
                         sentiment = NewsSentiment(ai_analysis['sentiment'])
