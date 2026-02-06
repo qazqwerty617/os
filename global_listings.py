@@ -20,17 +20,17 @@ class GlobalListingWatcher:
     Used to identify high-risk pumps causing by new listings.
     """
     
-    EXCHANGES = ['Binance', 'OKX', 'Bybit', 'Gate.io', 'BingX', 'KuCoin']
+    EXCHANGES = ['Binance', 'Binance Futures', 'OKX', 'Bybit', 'Gate.io', 'BingX', 'KuCoin']
     PERSISTENCE_FILE = "data/global_listings.json"
     
-    def __init__(self, check_interval: int = 600): # 10 minutes
+    def __init__(self, check_interval: int = 30): # 30 seconds for instant alerts
         self.check_interval = check_interval
         self._session: Optional[aiohttp.ClientSession] = None
         self._running = False
         self._is_first_run = True  # Flag to handle first scan properly
         
-        # Structure: { symbol: { exchange: first_seen_timestamp } }
         self.listings: Dict[str, Dict[str, int]] = {}
+        self._callbacks: List[callable] = []
         self._load_listings()
         
     def _load_listings(self):
@@ -97,6 +97,7 @@ class GlobalListingWatcher:
         
         tasks = [
             self._fetch_binance(),
+            self._fetch_binance_futures(),
             self._fetch_okx(),
             self._fetch_bybit(),
             self._fetch_gate(),
@@ -128,11 +129,30 @@ class GlobalListingWatcher:
                     self.listings[sym_upper][exchange_name] = discovery_time
                     if not self._is_first_run:
                         logger.info(f"✨ NEW LISTING: {sym_upper} on {exchange_name}")
+                        # Notify callbacks
+                        for cb in self._callbacks:
+                            asyncio.create_task(cb(sym_upper, exchange_name))
         
         # Mark first run as complete
         if self._is_first_run:
             self._is_first_run = False
             logger.info(f"📊 Initial scan complete: {len(self.listings)} symbols indexed")
+
+    async def _fetch_binance_futures(self) -> Set[str]:
+        """Fetch symbols from Binance Futures"""
+        try:
+            url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+            async with self._session.get(url, timeout=10) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return {s['baseAsset'] for s in data.get('symbols', []) if s['quoteAsset'] == 'USDT'}
+        except Exception:
+            pass
+        return set()
+
+    def on_new_listing(self, callback):
+        """Register callback for new listings"""
+        self._callbacks.append(callback)
 
     def check_token(self, symbol: str) -> Dict[str, str]:
         """

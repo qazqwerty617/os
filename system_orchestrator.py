@@ -225,6 +225,7 @@ class SystemOrchestrator:
         self.whale_detector.on_whale_detected(self._on_whale_detected)
         self.signal_engine.on_signal(self._on_enhanced_signal)
         self.listings_detector.on_new_listing(self._on_new_listing)
+        self.global_listings.on_new_listing(self.news_bot.handle_external_listing)
         
         # Subscribe monitors to health checks
         self.health_monitor.register_component('Orchestrator', lambda: self.is_running)

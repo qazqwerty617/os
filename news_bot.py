@@ -558,8 +558,15 @@ class NewsBot:
                 self.news.append(news)
                 self.stats['news_fetched'] += 1
                 
-                # Alert if important (Higher threshold)
-                if importance >= 80:
+                # === ULTRA-STRICT FILTERING ===
+                # Only 100% news: Important AND Reliable
+                ai_data = getattr(news, '_ai_analysis', {})
+                reliability = ai_data.get('reliability', 50)
+                
+                if importance >= 90 and reliability >= 85:
+                    await self._send_alert(news)
+                elif "BINANCE" in title.upper() and "LISTING" in title.upper():
+                    # Special case for manual detection if AI is slow
                     await self._send_alert(news)
                 
                 # Notify callbacks
@@ -748,7 +755,7 @@ SIGNAL:
 
 RU_TITLE: Professional Russian translation
 
-JSON ONLY."""
+JSON ONLY. BE ULTRA-CONSERVATIVE. IF NOT 100% SURE, LOWER THE RELIABILITY AND IMPORTANCE."""
 
                 session = await self._get_session()
                 async with session.post(
@@ -868,6 +875,43 @@ JSON ONLY."""
                     return text
             except Exception:
                 return text
+
+    async def handle_external_listing(self, symbol: str, exchange: str):
+        """Handle listings from GlobalListingWatcher as news"""
+        logger.info(f"🆕 External listing detected: {symbol} on {exchange}")
+        
+        # Create a synthetic news item for the listing
+        news_id = f"listing_{exchange}_{symbol}_{int(time.time())}"
+        title = f"BINANCE NEW LISTING: {symbol}" if "BINANCE" in exchange.upper() else f"NEW LISTING: {symbol} on {exchange}"
+        
+        news = NewsItem(
+            news_id=news_id,
+            source=NewsSource.WATCHER_GURU, # Use as proxy
+            title=title,
+            summary=f"Exchange {exchange} has just listed {symbol}. This is a high-volatility event.",
+            url=f"https://www.binance.com/en/support/announcement",
+            timestamp=int(time.time() * 1000),
+            sentiment=NewsSentiment.VERY_BULLISH,
+            sentiment_score=0.9,
+            mentioned_tokens=[symbol.upper()],
+            importance=100 # Listings are always 100
+        )
+        
+        # Add AI data directly to bypass analysis for 100% hits
+        news._ai_analysis = {
+            'importance': 100,
+            'sentiment': 'very_bullish',
+            'score': 0.9,
+            'reliability': 100,
+            'category': 'listing',
+            'urgency': 'immediate',
+            'signal': 'LONG',
+            'primary_token': symbol.upper(),
+            'ru_title': f"🔥 ЛИСТИНГ: {symbol} на {exchange.upper()}"
+        }
+        
+        self.news.append(news)
+        await self._send_alert(news)
 
     async def _send_alert(self, news: NewsItem):
         """Отправить алерт с сигналом LONG/SHORT"""
