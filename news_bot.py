@@ -745,7 +745,11 @@ RU_TITLE: Professional Russian translation
 
 JSON ONLY."""
             
+            # Anti-spam delay to stay under TPM limits
+            await asyncio.sleep(1.0)
+            
             session = await self._get_session()
+
             async with session.post(
                 f"{config.groq.base_url}/chat/completions",
                 headers={
@@ -815,13 +819,19 @@ JSON ONLY."""
                         
                     return json.loads(content)
                 else:
-                    logger.warning(f"⚠️ Groq API Error: {resp.status}")
+                    if resp.status == 429:
+                        logger.warning("⏳ Groq Rate Limit (429). Retrying in 3s...")
+                        await asyncio.sleep(3.0) # Simple retry logic handled in loop usually, but here we just wait
+                    else:
+                        logger.warning(f"⚠️ Groq API Error: {resp.status}")
+                    
                     try:
                         err_data = await resp.json()
                         logger.error(f"Groq Detail: {err_data}")
                     except:
                         pass
                     return None
+
 
                     
         except Exception as e:

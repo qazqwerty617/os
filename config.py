@@ -158,7 +158,7 @@ class GroqConfig:
     """Groq AI configuration (FREE, FAST)"""
     api_key: Optional[str] = None
     base_url: str = "https://api.groq.com/openai/v1"
-    model: str = "llama-3.3-70b-versatile"  # FREE, fast, accurate
+    model: str = "llama-3.1-8b-instant"  # HIGHER LIMITS, ultra-fast for news translation
     
     def __post_init__(self):
         self.api_key = os.getenv('GROQ_API_KEY')
