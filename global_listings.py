@@ -300,36 +300,36 @@ class GlobalListingWatcher:
 
     async def _fetch_binance(self) -> Set[str]:
         url = "https://api.binance.com/api/v3/exchangeInfo"
-        async with self._session.get(url) as resp:
+        async with self._session.get(url, timeout=10) as resp:
             data = await resp.json()
             return {s['baseAsset'] for s in data.get('symbols', [])}
 
     async def _fetch_okx(self) -> Set[str]:
         url = "https://www.okx.com/api/v5/public/instruments?instType=SPOT"
-        async with self._session.get(url) as resp:
+        async with self._session.get(url, timeout=10) as resp:
             data = await resp.json()
             return {s['baseCcy'] for s in data.get('data', [])}
 
     async def _fetch_bybit(self) -> Set[str]:
         url = "https://api.bybit.com/v5/market/instruments-info?category=spot"
-        async with self._session.get(url) as resp:
+        async with self._session.get(url, timeout=10) as resp:
             data = await resp.json()
             return {s['baseCoin'] for s in data.get('result', {}).get('list', [])}
 
     async def _fetch_gate(self) -> Set[str]:
         url = "https://api.gateio.ws/api/v4/spot/currency_pairs"
-        async with self._session.get(url) as resp:
+        async with self._session.get(url, timeout=10) as resp:
             data = await resp.json()
             return {s['base'] for s in data if isinstance(s, dict)}
 
     async def _fetch_bingx(self) -> Set[str]:
         url = "https://open-api.bingx.com/openApi/spot/v1/common/symbols"
-        async with self._session.get(url) as resp:
-            data = await resp.json()
+        async with self._session.get(url, timeout=15) as resp:
+            data = await resp.json(content_type=None)
             return {s['symbol'].split('-')[0] for s in data.get('data', {}).get('symbols', [])}
 
     async def _fetch_kucoin(self) -> Set[str]:
         url = "https://api.kucoin.com/api/v1/symbols"
-        async with self._session.get(url) as resp:
+        async with self._session.get(url, timeout=10) as resp:
             data = await resp.json()
             return {s['baseCurrency'] for s in data.get('data', [])}
