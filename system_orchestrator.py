@@ -76,7 +76,7 @@ class SystemOrchestrator:
     Manages the lifecycle of all 53 Application Modules.
     """
     
-    def __init__(self, capital: float = 10000, risk_level: str = 'moderate'):
+    def __init__(self, capital: float = 100, risk_level: str = 'moderate'):
         self.is_running = False
         self._shutdown_event = asyncio.Event()
         
@@ -755,7 +755,7 @@ class SystemOrchestrator:
                 await asyncio.sleep(60)
 
 # Global Entry Point helper
-async def run_system(capital=10000, risk='moderate'):
+async def run_system(capital=100, risk='moderate'):
     orchestrator = SystemOrchestrator(capital, risk)
     
     # Signal handling

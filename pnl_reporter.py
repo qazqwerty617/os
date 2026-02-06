@@ -108,8 +108,8 @@ class PnLReporter:
         self.weekly_reports: List[WeeklyReport] = []
         
         # Текущий баланс
-        self.starting_balance: float = 10000
-        self.current_balance: float = 10000
+        self.starting_balance: float = 100
+        self.current_balance: float = 100
         
         # Статистика
         self.stats = {

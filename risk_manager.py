@@ -164,7 +164,7 @@ class RiskManager:
     
     def __init__(
         self,
-        capital: float = 10000,
+        capital: float = 100,
         risk_level: RiskLevel = RiskLevel.MODERATE,
         max_leverage: int = 20
     ):
