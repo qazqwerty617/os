@@ -749,76 +749,72 @@ SIGNAL:
 RU_TITLE: Professional Russian translation
 
 JSON ONLY."""
-            
-            # Anti-spam delay to stay under TPM limits
-            await asyncio.sleep(1.0)
-            
-            session = await self._get_session()
 
-            async with session.post(
-                f"{config.groq.base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {config.groq.api_key}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "model": config.groq.model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.1,
-                    "max_tokens": 300
-                },
-                timeout=12
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    content = data['choices'][0]['message']['content']
-                    
-                    if '{' in content and '}' in content:
-                        start = content.find('{')
-                        end = content.rfind('}') + 1
-                        result = json.loads(content[start:end])
+                session = await self._get_session()
+                async with session.post(
+                    f"{config.groq.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {config.groq.api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": config.groq.model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": 0.1,
+                        "max_tokens": 300
+                    },
+                    timeout=12
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        content = data['choices'][0]['message']['content']
                         
-                        orig = result.get('importance', 50)
-                        
-                        # === IDEAL FILTERS ===
-                        
-                        # 1. BLOCK: Fake
-                        if result.get('is_fake', False):
-                            logger.info(f"🚫 FAKE: {title[:40]}...")
-                            result['importance'] = 0
-                            return result
-                        
-                        # 2. BLOCK: Clickbait
-                        if result.get('is_clickbait', False):
-                            logger.info(f"🚫 CLICKBAIT: {title[:40]}...")
-                            result['importance'] = 0
-                            return result
-                        
-                        # 3. BLOCK: Not crypto
-                        if not result.get('is_crypto_relevant', True):
-                            logger.info(f"🚫 NOT CRYPTO: {title[:40]}...")
-                            result['importance'] = 0
-                            return result
-                        
-                        # 4. PENALTY: Low reliability
-                        rel = result.get('reliability', 50)
-                        if rel < 30:
-                            result['importance'] = min(orig, 15)
-                        elif rel < 50:
-                            result['importance'] = int(orig * 0.7)
-                        
-                        # 5. PENALTY: Not actionable
-                        if not result.get('is_actionable', True):
-                            result['importance'] = int(result['importance'] * 0.7)
-                        
-                        # 6. BOOST: Urgent + reliable
-                        if result.get('urgency') == 'immediate' and rel >= 70:
-                            result['importance'] = min(100, result['importance'] + 15)
-                        
-                        # 7. BOOST: Specific token + actionable
-                        if tokens and result.get('is_actionable') and rel >= 60:
-                            result['importance'] = min(100, result['importance'] + 10)
-                        
+                        if '{' in content and '}' in content:
+                            start = content.find('{')
+                            end = content.rfind('}') + 1
+                            result = json.loads(content[start:end])
+                            
+                            orig = result.get('importance', 50)
+                            
+                            # === IDEAL FILTERS ===
+                            
+                            # 1. BLOCK: Fake
+                            if result.get('is_fake', False):
+                                logger.info(f"🚫 FAKE: {title[:40]}...")
+                                result['importance'] = 0
+                                return result
+                            
+                            # 2. BLOCK: Clickbait
+                            if result.get('is_clickbait', False):
+                                logger.info(f"🚫 CLICKBAIT: {title[:40]}...")
+                                result['importance'] = 0
+                                return result
+                            
+                            # 3. BLOCK: Not crypto
+                            if not result.get('is_crypto_relevant', True):
+                                logger.info(f"🚫 NOT CRYPTO: {title[:40]}...")
+                                result['importance'] = 0
+                                return result
+                            
+                            # 4. PENALTY: Low reliability
+                            rel = result.get('reliability', 50)
+                            if rel < 30:
+                                result['importance'] = min(orig, 15)
+                            elif rel < 50:
+                                result['importance'] = int(orig * 0.7)
+                            
+                            # 5. PENALTY: Not actionable
+                            if not result.get('is_actionable', True):
+                                result['importance'] = int(result['importance'] * 0.7)
+                            
+                            # 6. BOOST: Urgent + reliable
+                            if result.get('urgency') == 'immediate' and rel >= 70:
+                                result['importance'] = min(100, result['importance'] + 15)
+                            
+                            # 7. BOOST: Specific token + actionable
+                            if tokens and result.get('is_actionable') and rel >= 60:
+                                result['importance'] = min(100, result['importance'] + 10)
+                            
                             logger.debug(f"✅ {title[:35]}... | {orig}→{result['importance']} | rel:{rel}")
                             return result
                             
@@ -829,43 +825,49 @@ JSON ONLY."""
                             await asyncio.sleep(10.0)
                         else:
                             logger.warning(f"⚠️ Groq API Error: {resp.status}")
-                    
-                    try:
-                        err_data = await resp.json()
-                        logger.error(f"Groq Detail: {err_data}")
-                    except:
-                        pass
-                    return None
-
-
-                    
-        except Exception as e:
-            logger.debug(f"Groq failed: {e}")
-            return None
+                        
+                        try:
+                            err_data = await resp.json()
+                            logger.error(f"Groq Detail: {err_data}")
+                        except:
+                            pass
+                        return None
+            except Exception as e:
+                logger.debug(f"Groq failed: {e}")
+                return None
 
     async def _translate_text(self, text: str) -> str:
         """Translate text to Russian using Groq (Fallback)"""
-                "model": config.groq.model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.1
-            }
-            
-            # Anti-spam delay
-            await asyncio.sleep(0.5)
-            
-            session = await self._get_session()
-            async with session.post(f"{config.groq.base_url}/chat/completions", headers=headers, json=data, timeout=10) as resp:
-                if resp.status == 200:
-                    res_json = await resp.json()
-                    translation = res_json['choices'][0]['message']['content'].strip()
-                    # Remove quotes or markdown if present
-                    translation = translation.replace('"', '').replace('«', '').replace('»', '')
-                    return translation
-
-                    return translation
+        async with self._ai_lock:
+            try:
+                if not config.groq.api_key: return text
+                
+                # Anti-spam delay
+                await asyncio.sleep(2.0)
+                
+                prompt = f"Translate this crypto news headline to professional Russian. Only return the translation, no extra text:\n\n{text}"
+                
+                headers = {
+                    "Authorization": f"Bearer {config.groq.api_key}",
+                    "Content-Type": "application/json"
+                }
+                data = {
+                    "model": config.groq.model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.1
+                }
+                
+                session = await self._get_session()
+                async with session.post(f"{config.groq.base_url}/chat/completions", headers=headers, json=data, timeout=10) as resp:
+                    if resp.status == 200:
+                        res_json = await resp.json()
+                        translation = res_json['choices'][0]['message']['content'].strip()
+                        # Remove quotes or markdown if present
+                        translation = translation.replace('"', '').replace('«', '').replace('»', '')
+                        return translation
+                    return text
+            except Exception:
                 return text
-        except Exception:
-            return text
 
     async def _send_alert(self, news: NewsItem):
         """Отправить алерт с сигналом LONG/SHORT"""
