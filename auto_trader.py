@@ -96,8 +96,9 @@ class AutoTrader:
         api_key: str = "",
         api_secret: str = "",
         demo_mode: bool = True,
-        max_positions: int = 8,  # Увеличено для мемкоинов (было 5)
-        max_position_size_pct: float = 15  # Увеличено для мемкоинов (было 10)
+        initial_balance: float = 100.0,
+        max_positions: int = 8,
+        max_position_size_pct: float = 15
     ):
         self.api_key = api_key
         self.api_secret = api_secret
@@ -109,7 +110,7 @@ class AutoTrader:
         self.orders: Dict[str, AutoOrder] = {}
         self.order_history: List[AutoOrder] = []
         
-        self.demo_balance = self.INITIAL_BALANCE
+        self.demo_balance = initial_balance
         self.demo_pnl = 0
         
         self.on_order_filled: Optional[Callable] = None

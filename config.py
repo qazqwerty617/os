@@ -164,7 +164,19 @@ class GroqConfig:
         # Load multiple keys separated by comma
         raw_keys = os.getenv('GROQ_API_KEY', '')
         if raw_keys:
-            self.api_keys = [k.strip() for k in raw_keys.split(',') if k.strip()]
+            # Clean keys from potential quotes and whitespace
+            self.api_keys = [
+                k.strip().strip("'").strip('"') 
+                for k in raw_keys.split(',') 
+                if k.strip()
+            ]
+        
+        import logging
+        logger = logging.getLogger("Config")
+        if self.api_keys:
+            logger.info(f"✅ Loaded {len(self.api_keys)} Groq API keys for rotation")
+        else:
+            logger.warning("⚠️ No Groq API keys found in environment")
 
 @dataclass
 class DashboardConfig:

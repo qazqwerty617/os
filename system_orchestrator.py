@@ -129,7 +129,7 @@ class SystemOrchestrator:
         self.order_flow = OrderFlowAnalyzer()
         self.smart_money = SmartMoneyTracker()
         self.backtest = BacktestEngine(capital)
-        self.auto_trader = AutoTrader(demo_mode=True, max_positions=5)
+        self.auto_trader = AutoTrader(demo_mode=True, max_positions=8, initial_balance=capital)
         self.self_learning = SelfLearningEngine()
         
         # 7. Notifications & Reports
@@ -642,8 +642,30 @@ class SystemOrchestrator:
     async def _dashboard_update_loop(self):
         from dashboard import broadcast_update
         while self.is_running:
-            await broadcast_update()
-            await asyncio.sleep(2)
+            try:
+                # 1. Update Main Dashboard (WebSocket)
+                await broadcast_update()
+                
+                # 2. Update Mobile Dashboard
+                if hasattr(self, 'auto_trader') and self.auto_trader:
+                    self.mobile_dashboard.update_stats(
+                        balance=self.auto_trader.demo_balance,
+                        pumps=self.stats.get('signals_generated', 0),
+                        winrate=self.self_learning.stats.win_rate * 100 if hasattr(self.self_learning, 'stats') else 0,
+                        total_trades=len(self.auto_trader.order_history)
+                    )
+                    
+                    # Also update PnL on mobile
+                    self.mobile_dashboard.update_pnl(
+                        today=self.auto_trader.demo_pnl,
+                        all_time=self.auto_trader.demo_pnl,
+                        trades=len(self.auto_trader.order_history)
+                    )
+                
+                await asyncio.sleep(2)
+            except Exception as e:
+                logger.debug(f"Dashboard sync error: {e}")
+                await asyncio.sleep(5)
 
     async def _database_cleanup_loop(self):
         while self.is_running:
