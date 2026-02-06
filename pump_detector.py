@@ -353,12 +353,10 @@ class PumpDetector:
         ticker = self.client.tickers.get(symbol)
         volume_usd = ticker.volume_24h * ticker.price if ticker else 0
         
-        # Daily volume filters - DISABLED for pure price mode
-        # if volume_usd < self.config.filters.min_daily_volume_usd:
-        #     if price_change < 30:
-        #         return
-        # if volume_usd > self.config.filters.max_daily_volume_usd:
-        #     return
+        # MINIMUM VOLUME FILTER - skip garbage pumps
+        MIN_PUMP_VOLUME_USD = 1000  # Skip pumps with < $1000 volume
+        if volume_usd < MIN_PUMP_VOLUME_USD:
+            return  # Skip low-volume garbage
         
         # Create signal
         signal = PumpSignal(

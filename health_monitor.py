@@ -139,6 +139,8 @@ class HealthMonitor:
         self._running = False
         self._last_report_time = 0
         self._report_interval = 3600  # Every hour
+        self._last_alert_time: Dict[str, float] = {}  # Cooldown per alert type
+        self._alert_cooldown = 1800  # 30 minutes cooldown
     
     async def start(self):
         """Запустить монитор"""
@@ -345,24 +347,19 @@ class HealthMonitor:
     
     async def _check_system_thresholds(self, metrics: SystemMetrics):
         """Проверить пороговые значения"""
-        alerts = []
+        now = time.time()
         
+        # Check CPU with cooldown
         if metrics.cpu_percent > self.CPU_WARNING_PCT:
-            alerts.append(f"⚠️ High CPU: {metrics.cpu_percent:.1f}%")
+            if now - self._last_alert_time.get('cpu', 0) > self._alert_cooldown:
+                await self._alert(f"⚠️ High CPU: {metrics.cpu_percent:.1f}%")
+                self._last_alert_time['cpu'] = now
         
+        # Check Memory with cooldown
         if metrics.memory_percent > self.MEMORY_WARNING_PCT:
-            alerts.append(f"⚠️ High Memory: {metrics.memory_percent:.1f}%")
-        
-        for alert in alerts:
-            if alert not in self.active_alerts:
-                self.active_alerts.append(alert)
-                await self._alert(alert)
-        
-        # Clear resolved alerts
-        if metrics.cpu_percent <= self.CPU_WARNING_PCT:
-            self.active_alerts = [a for a in self.active_alerts if 'CPU' not in a]
-        if metrics.memory_percent <= self.MEMORY_WARNING_PCT:
-            self.active_alerts = [a for a in self.active_alerts if 'Memory' not in a]
+            if now - self._last_alert_time.get('memory', 0) > self._alert_cooldown:
+                await self._alert(f"⚠️ High Memory: {metrics.memory_percent:.1f}%")
+                self._last_alert_time['memory'] = now
     
     async def _alert(self, message: str):
         """Отправить алерт"""
