@@ -9,7 +9,7 @@ import time
 import logging
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, field
-from collections import defaultdict
+from collections import defaultdict, deque
 
 import aiohttp
 
@@ -165,8 +165,8 @@ class MarketAnalyzer:
         self.order_books: Dict[str, OrderBook] = {}
         self.funding_rates: Dict[str, FundingInfo] = {}
         self.open_interest: Dict[str, OpenInterestData] = {}
-        self.liquidations: Dict[str, List[LiquidationEvent]] = defaultdict(list)
-        self.oi_history: Dict[str, List[Tuple[int, float]]] = defaultdict(list)
+        self.liquidations: Dict[str, deque] = defaultdict(lambda: deque(maxlen=100))
+        self.oi_history: Dict[str, deque] = defaultdict(lambda: deque(maxlen=200))
     
     async def start(self):
         import ssl

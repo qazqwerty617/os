@@ -9,7 +9,7 @@ import logging
 import ssl
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
-from collections import defaultdict
+from collections import defaultdict, deque
 
 import aiohttp
 
@@ -67,9 +67,9 @@ class MEXCClient:
         self.session: Optional[aiohttp.ClientSession] = None
         self.ssl_context: Optional[ssl.SSLContext] = None
         
-        # Data storage
+        # Data storage (with limits to prevent memory leaks)
         self.tickers: Dict[str, Ticker] = {}
-        self.klines: Dict[str, List[Kline]] = defaultdict(list)
+        self.klines: Dict[str, deque] = defaultdict(lambda: deque(maxlen=200))
         self.symbols: Dict[str, SymbolInfo] = {}
         
         # Rate limiting - 20 requests/sec
