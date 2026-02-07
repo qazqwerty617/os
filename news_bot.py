@@ -837,11 +837,17 @@ JSON ONLY. BE ULTRA-CONSERVATIVE. IF NOT 100% SURE, LOWER THE RELIABILITY AND IM
                                     continue
                                 else:
                                     await asyncio.sleep(5) # All keys spent
+                            elif resp.status == 401:
+                                logger.error(f"🔑 Groq Key {key_idx + 1} is INVALID (401). Skipping...")
+                                if attempt < max_retries - 1:
+                                    continue
                             else:
-                                logger.warning(f"⚠️ Groq API Error: {resp.status}")
+                                logger.warning(f"⚠️ Groq API Error {resp.status} on Key {key_idx + 1}")
+                                if attempt < max_retries - 1:
+                                    continue
                                 return None
                     except Exception as e:
-                        logger.debug(f"Request failed: {e}")
+                        logger.debug(f"Request failed on Key {key_idx + 1}: {e}")
                         if attempt < max_retries - 1: continue
                         return None
                 
@@ -854,6 +860,8 @@ JSON ONLY. BE ULTRA-CONSERVATIVE. IF NOT 100% SURE, LOWER THE RELIABILITY AND IM
         """Translate text to Russian using Groq (Fallback)"""
         async with self._ai_lock:
             max_retries = len(config.groq.api_keys)
+            if max_retries == 0: return text
+            
             for attempt in range(max_retries):
                 try:
                     api_key, key_idx = self._get_current_key()
@@ -881,7 +889,8 @@ JSON ONLY. BE ULTRA-CONSERVATIVE. IF NOT 100% SURE, LOWER THE RELIABILITY AND IM
                             res_json = await resp.json()
                             translation = res_json['choices'][0]['message']['content'].strip()
                             return translation.replace('"', '').replace('«', '').replace('»', '')
-                        elif resp.status == 429:
+                        elif resp.status in [401, 429]:
+                            logger.warning(f"⚠️ Translation failed (Error {resp.status}) on Key {key_idx + 1}. Trying next...")
                             if attempt < max_retries - 1: continue
                         return text
                 except Exception:
