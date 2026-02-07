@@ -233,10 +233,13 @@ class AutoTrader:
             if current_price >= order.stop_loss:
                 close_reason = "STOP_LOSS"
             elif current_price <= order.take_profit1 and not position.tp1_filled:
-                close_reason, close_pct = "TAKE_PROFIT_1", 30
+                close_reason, close_pct = "TAKE_PROFIT_1", 50
                 position.tp1_filled = True
+                # Move stop loss to entry (breakeven)
+                order.stop_loss = position.entry_price
+                logger.info(f"🔒 {position.symbol}: TP1 hit! 50% closed, stop moved to breakeven ({position.entry_price:.6f})")
             elif current_price <= order.take_profit2 and not position.tp2_filled:
-                close_reason, close_pct = "TAKE_PROFIT_2", 40
+                close_reason, close_pct = "TAKE_PROFIT_2", 50  # Close remaining 50%
                 position.tp2_filled = True
             elif current_price <= order.take_profit3:
                 close_reason = "TAKE_PROFIT_3"
