@@ -8,7 +8,7 @@ import logging
 import time
 import re
 import aiohttp
-from typing import Dict, List, Optional, Callable
+from typing import Dict, List, Optional, Callable, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from datetime import datetime, timedelta
