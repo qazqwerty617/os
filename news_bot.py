@@ -130,9 +130,9 @@ class NewsBot:
         self.telegram = telegram
         self._session: Optional[aiohttp.ClientSession] = None
         
-        # News storage (Optimized for 8GB RAM)
+        # News storage (Optimized for VPS with limited RAM)
         self.news: List[NewsItem] = []
-        self.max_news = 2000  # Previously 500
+        self.max_news = 500  # Reduced from 2000 to prevent RAM exhaustion
         
         # Seen news (to avoid duplicates) - load from disk
         self._seen_ids: set = self._load_seen_ids()
@@ -168,9 +168,9 @@ class NewsBot:
         """Save seen news IDs to disk"""
         import os
         
-        # Trim in-memory set to prevent memory leak, but allow more for large RAM
-        if len(self._seen_ids) > 5000:
-            self._seen_ids = set(list(self._seen_ids)[-3000:])
+        # Trim in-memory set to prevent memory leak
+        if len(self._seen_ids) > 2000:
+            self._seen_ids = set(list(self._seen_ids)[-1000:])
         
         os.makedirs(os.path.dirname(self.SEEN_IDS_FILE), exist_ok=True)
         try:
@@ -495,22 +495,23 @@ class NewsBot:
                 tokens = self._extract_tokens(title + " " + description)
                 if self._is_noise(title):
                     continue
-                    
-                if self._is_noise(title):
-                    continue
                 
-                # Use Groq if enabled
-                if config.groq.api_keys:
+                # Pre-calculate importance with heuristics
+                heuristic_importance = self._calculate_importance(title, tokens, sentiment)
+                
+                # Only use Groq for potentially important news (saves API quota)
+                # Use Groq if: has crypto tokens OR heuristic importance >= 60
+                use_groq = config.groq.api_keys and (tokens or heuristic_importance >= 60)
+                
+                if use_groq:
                     ai_analysis = await self._analyze_with_groq(title, description, tokens)
                     if ai_analysis:
                         sentiment = NewsSentiment(ai_analysis['sentiment'])
                         score = ai_analysis['score']
                         importance = ai_analysis['importance']
-                        # Translation logic handled later or integrated? 
-                        # Let's use the translation from OpenRouter if available
                         self._cached_translation = ai_analysis.get('ru_title')
                     else:
-                         importance = self._calculate_importance(title, tokens, sentiment)
+                         importance = heuristic_importance
                 else:
                     # LOCAL MODEL fallback (The "Lazy" request)
                     # Use Naive Bayes classifier trained on heuristics

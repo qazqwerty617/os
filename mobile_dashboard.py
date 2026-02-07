@@ -674,6 +674,9 @@ class MobileDashboard:
             self.data['stats']['losses'] = losses
         if profit_factor is not None:
             self.data['stats']['profitFactor'] = profit_factor
+        
+        # Debug logging
+        logger.debug(f"📱 Dashboard updated: balance=${balance}, pumps={pumps}, trades={total_trades}")
     
     def add_signal(
         self,

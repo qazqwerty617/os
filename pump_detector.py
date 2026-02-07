@@ -8,7 +8,7 @@ import time
 import logging
 from typing import Dict, List, Optional, Set
 from dataclasses import dataclass, field
-from collections import defaultdict
+from collections import defaultdict, deque
 
 from config import config
 from indicators import calculate_all_indicators, IndicatorResult
@@ -163,8 +163,8 @@ class PumpDetector:
         # Active signals
         self.active_signals: Dict[str, PumpSignal] = {}
         
-        # Signal history
-        self.signal_history: List[PumpSignal] = []
+        # Signal history (limited to prevent memory leak)
+        self.signal_history: deque = deque(maxlen=100)
         
         # Cooldown to avoid duplicate signals - СНИЖЕН для мемкоинов
         self.cooldown: Dict[str, int] = {}  # symbol -> last signal timestamp

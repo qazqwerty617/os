@@ -121,7 +121,7 @@ class AIPumpPredictor:
     def __init__(self):
         self.price_history: Dict[str, deque] = {}
         self.volume_history: Dict[str, deque] = {}
-        self.predictions_history: List[Tuple[PumpPrediction, bool]] = []
+        self.predictions_history: deque = deque(maxlen=500)  # Limited to prevent memory leak
         
         self.factor_weights = self.DEFAULT_WEIGHTS.copy()
         self.learning_rate = 1.0
