@@ -102,7 +102,9 @@ class NewsBot:
         'price analysis', 'price prediction', 'market outlook', 'top crypto',
         'can hit', 'could reach', 'predicts', 'opinion', 'daily digest',
         'borrowing shifts', 'etfs bounce', 'volumes plunge', 'price analysis',
-        'анализ цены', 'прогноз', 'мнение', 'топ криптовалют'
+        'анализ цены', 'прогноз', 'мнение', 'топ криптовалют',
+        'nvidia', 'nvda', 'amazon', 'amzn', 'stocks', 'equity', 'nasdaq', 'nyse',
+        'trumprx', 'earnings report', 'q4 earnings', 'fed pivot', 'interest rates'
     ]
     
     # Common crypto tokens to track
@@ -770,8 +772,8 @@ JSON ONLY. BE ULTRA-CONSERVATIVE. IF NOT 100% SURE, LOWER THE RELIABILITY AND IM
                     
                     logger.debug(f"🤖 Groq Analysis: Using key {key_idx + 1}/{len(config.groq.api_keys)}")
                     
-                    # Anti-spam delay
-                    await asyncio.sleep(0.5 if len(config.groq.api_keys) > 1 else 2.0)
+                    # Anti-spam delay: Free tier needs AT LEAST 2.5-3.0s regardless of key count
+                    await asyncio.sleep(2.5)
 
                     session = await self._get_session()
                     try:
@@ -832,7 +834,8 @@ JSON ONLY. BE ULTRA-CONSERVATIVE. IF NOT 100% SURE, LOWER THE RELIABILITY AND IM
                                 return None
                             
                             elif resp.status == 429:
-                                logger.warning(f"⏳ Groq Key {key_idx + 1} Rate Limited (429). Trying next key...")
+                                logger.warning(f"⏳ Groq Key {key_idx + 1} Rate Limited (429). Cooling down 5s...")
+                                await asyncio.sleep(5)
                                 if attempt < max_retries - 1:
                                     continue
                                 else:
@@ -867,7 +870,7 @@ JSON ONLY. BE ULTRA-CONSERVATIVE. IF NOT 100% SURE, LOWER THE RELIABILITY AND IM
                     api_key, key_idx = self._get_current_key()
                     if not api_key: return text
                     
-                    await asyncio.sleep(0.5 if len(config.groq.api_keys) > 1 else 2.0)
+                    await asyncio.sleep(2.5)
                     
                     prompt = f"Translate this crypto news headline to professional Russian. Only return the translation, no extra text:\n\n{text}"
                     
@@ -890,7 +893,8 @@ JSON ONLY. BE ULTRA-CONSERVATIVE. IF NOT 100% SURE, LOWER THE RELIABILITY AND IM
                             translation = res_json['choices'][0]['message']['content'].strip()
                             return translation.replace('"', '').replace('«', '').replace('»', '')
                         elif resp.status in [401, 429]:
-                            logger.warning(f"⚠️ Translation failed (Error {resp.status}) on Key {key_idx + 1}. Trying next...")
+                            logger.warning(f"⚠️ Translation failed (Error {resp.status}) on Key {key_idx + 1}. Cooling down...")
+                            await asyncio.sleep(5 if resp.status == 429 else 1)
                             if attempt < max_retries - 1: continue
                         return text
                 except Exception:
