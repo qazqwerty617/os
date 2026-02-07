@@ -5,7 +5,7 @@ from profit_maximizer import ProfitMaximizer
 
 # Mock Classes
 class MockClient:
-    async def get_balance(self): return {'equity': 10000}
+    async def get_balance(self): return {'equity': 100}
     
 class MockRiskManager(RiskManager):
     pass
@@ -15,7 +15,7 @@ async def test_full_system_flow():
     print("-" * 60)
     
     # Init
-    risk_manager = RiskManager(capital=10000, risk_level=RiskLevel.AGGRESSIVE)
+    risk_manager = RiskManager(capital=100, risk_level=RiskLevel.AGGRESSIVE)
     client = MockClient()
     optimizer = ProfitMaximizer(client, risk_manager)
     optimizer.is_enabled = True # FORCE ENABLE FOR TEST
