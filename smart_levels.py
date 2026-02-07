@@ -703,7 +703,7 @@ class SmartLevelsCalculator:
             for level in key_levels:
                 if level.level_type == 'resistance' and level.price > entry:
                     distance = (level.price - entry) / entry * 100
-                    if 2 < distance < 8:  # Разумное расстояние
+                    if 3 < distance < 15:  # Расширено для мемкоинов (было 2-8%)
                         # Бонус за order book уровень
                         reason = f"Сопротивление ({level.strength:.0f})"
                         if level.volume_at_level > 0:
@@ -724,8 +724,8 @@ class SmartLevelsCalculator:
                 best = candidates[0]
                 return best[0], best[1], best[2]
             
-            # Fallback: 3% выше входа
-            return entry * 1.03, "Фиксированный 3%", 50
+            # Fallback: 5% выше входа (для волатильных мемкоинов)
+            return entry * 1.05, "Фиксированный 5%", 50
         
         else:  # LONG
             candidates = []
@@ -750,7 +750,7 @@ class SmartLevelsCalculator:
             for level in key_levels:
                 if level.level_type == 'support' and level.price < entry:
                     distance = (entry - level.price) / entry * 100
-                    if 2 < distance < 8:
+                    if 3 < distance < 15:  # Расширено для мемкоинов
                         candidates.append((level.price * 0.999, f"Поддержка ({level.strength:.0f})", level.strength))
             
             # 3. Структура (LL для лонга)
@@ -766,7 +766,7 @@ class SmartLevelsCalculator:
                 best = candidates[0]
                 return best[0], best[1], best[2]
             
-            return entry * 0.97, "Фиксированный 3%", 50
+            return entry * 0.95, "Фиксированный 5%", 50
     
     def _calculate_take_profit_1(
         self,

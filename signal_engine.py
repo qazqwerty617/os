@@ -306,13 +306,15 @@ class SignalEngine:
         
         quality = self._get_quality(final_score)
         
-        # Calculate trade parameters
+        # Calculate trade parameters for memecoins (wider stops for volatility)
         entry_price = price
-        sl_pct = max(3, min(8, ext * 0.5))
+        # Стоп 5-12% - даёт больше места для волатильности
+        sl_pct = max(5, min(12, ext * 0.7))
         stop_loss = price * (1 + sl_pct / 100)
         
-        tp1_pct = sl_pct * 1.5
-        tp2_pct = sl_pct * 3.0
+        # TP: 2x и 4x риск (вместо 1.5x и 3x) - лучший R:R
+        tp1_pct = sl_pct * 2.0
+        tp2_pct = sl_pct * 4.0
         
         take_profit_1 = price * (1 - tp1_pct / 100)
         take_profit_2 = price * (1 - tp2_pct / 100)

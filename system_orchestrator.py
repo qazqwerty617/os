@@ -129,13 +129,19 @@ class SystemOrchestrator:
         self.order_flow = OrderFlowAnalyzer()
         self.smart_money = SmartMoneyTracker()
         self.backtest = BacktestEngine(capital)
-        self.auto_trader = AutoTrader(demo_mode=True, max_positions=8, initial_balance=capital)
+        self.mobile_dashboard = MobileDashboard(port=8081)
+        self.auto_trader = AutoTrader(
+            demo_mode=True, 
+            max_positions=8, 
+            initial_balance=capital,
+            dashboard=self.mobile_dashboard
+        )
         self.self_learning = SelfLearningEngine()
         
         # 7. Notifications & Reports
         self.pnl_reporter = PnLReporter(self.telegram)
         self.news_parser = CryptoNewsParser(self.telegram)
-        self.mobile_dashboard = MobileDashboard(port=8081)
+        # self.mobile_dashboard already initialized above
         self.news_bot = NewsBot(telegram=self.telegram)
         self.contract_scanner = ContractScanner(self.telegram)
         self.economic_calendar = EconomicCalendar(self.telegram)

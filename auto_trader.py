@@ -41,6 +41,7 @@ class AutoOrder:
     take_profit1: float
     take_profit2: float = 0
     take_profit3: float = 0
+    leverage: int = 1
     status: OrderStatus = OrderStatus.PENDING
     filled_price: float = 0
     filled_quantity: float = 0
@@ -98,13 +99,15 @@ class AutoTrader:
         demo_mode: bool = True,
         initial_balance: float = 100.0,
         max_positions: int = 8,
-        max_position_size_pct: float = 15
+        max_position_size_pct: float = 15,
+        dashboard = None
     ):
         self.api_key = api_key
         self.api_secret = api_secret
         self.demo_mode = demo_mode
         self.max_positions = max_positions
         self.max_position_size_pct = max_position_size_pct
+        self.dashboard = dashboard
         
         self.positions: Dict[str, Position] = {}
         self.orders: Dict[str, AutoOrder] = {}
@@ -168,7 +171,8 @@ class AutoTrader:
             take_profit3=take_profit3 or take_profit1 * 0.90,
             created_at=datetime.now(),
             signal_source=signal_source,
-            confidence=confidence
+            confidence=confidence,
+            leverage=leverage
         )
         
         self.orders[order.order_id] = order
@@ -200,12 +204,20 @@ class AutoTrader:
             side=order.side,
             entry_price=order.filled_price,
             quantity=order.filled_quantity,
-            opened_at=datetime.now()
+            opened_at=datetime.now(),
+            leverage=order.leverage
         )
         
         self.positions[order.symbol] = position
         self.stats['positions_opened'] += 1
-        self.demo_balance -= order.filled_price * order.filled_quantity
+        self.demo_balance -= order.filled_price * order.filled_quantity * (1/order.leverage if hasattr(order, 'leverage') else 1)
+        
+        # Update Dashboard
+        if self.dashboard:
+            self.dashboard.update_stats(
+                balance=self.demo_balance,
+                total_trades=self.stats['orders_filled']
+            )
         
         if self.on_order_filled:
             await self.on_order_filled(order)
@@ -268,6 +280,20 @@ class AutoTrader:
         
         self.demo_balance += close_quantity * exit_price + pnl_usd
         self.demo_pnl += pnl_usd
+        
+        # Update Dashboard
+        if self.dashboard:
+            self.dashboard.update_pnl(
+                today=self.demo_pnl,
+                all_time=self.stats['total_pnl_usd'],
+                trades=self.stats['orders_filled']
+            )
+            self.dashboard.update_stats(
+                balance=self.demo_balance,
+                wins=self.stats['wins'],
+                losses=self.stats['losses'],
+                total_trades=self.stats['orders_filled']
+            )
         
         emoji = '✅' if pnl_pct > 0 else '❌'
         logger.info(f"{emoji} Closed: {position.symbol} | P&L: {pnl_pct:+.2f}% (${pnl_usd:+.2f}) | {reason}")
