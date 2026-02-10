@@ -73,13 +73,24 @@ logger = logging.getLogger("Orchestrator")
 
 class SystemOrchestrator:
     """
-    🔗 The Central Nervous System
-    Manages the lifecycle of all 53 Application Modules.
+    🧠 The Brain - Central Nervous System
+    Single entry point: manages lifecycle of all 53 modules.
+    Run with: python main.py
     """
     
-    def __init__(self, capital: float = 100, risk_level: str = 'moderate'):
+    def __init__(
+        self,
+        capital: float = None,
+        risk_level: str = 'moderate',
+        with_dashboard: bool = True,
+        dashboard_port: int = 8080,
+    ):
         self.is_running = False
         self._shutdown_event = asyncio.Event()
+        self.with_dashboard = with_dashboard
+        self.dashboard_port = dashboard_port
+        self._dashboard_server = None
+        capital = capital if capital is not None else config.demo.initial_balance
         
         # Risk Enum Conversion
         risk_enum = RiskLevel.MODERATE
@@ -180,25 +191,42 @@ class SystemOrchestrator:
         }
 
     async def start(self):
-        """Phase 2: Start all components in dependency order"""
+        """Phase 2: Start all components in dependency order - ONE COMMAND TO RULE THEM ALL"""
         logger.info("="*60)
-        logger.info("🚀 SYSTEM ORCHESTRATOR STARTUP SEQUENCE")
+        logger.info("🧠 SYSTEM ORCHESTRATOR - STARTING BRAIN")
         logger.info("="*60)
         
         self.is_running = True
         self.stats['start_time'] = datetime.now()
         
-        # 1. Start Support Systems
-        await self.health_monitor.start()
+        try:
+            await self.health_monitor.start()
+        except Exception as e:
+            logger.warning(f"Health monitor: {e}")
+        
         await self.mobile_dashboard.start()
-        await self.telegram_commands.start()
+        logger.info(f"📱 Mobile: http://localhost:{self.mobile_dashboard.port}/mobile")
+        
+        try:
+            await self.telegram_commands.start()
+        except Exception as e:
+            logger.warning(f"Telegram commands: {e}")
+        
         await event_bus.start(num_workers=5)
         
-        # 2. Connect to Exchange
-        logger.info("📡 Connecting to MEXC API...")
-        await self.client.start()
+        logger.info("📡 Connecting to MEXC...")
+        for attempt in range(3):
+            try:
+                await self.client.start()
+                break
+            except Exception as e:
+                if attempt < 2:
+                    logger.warning(f"MEXC retry {attempt+1}/3: {e}")
+                    await asyncio.sleep(2)
+                else:
+                    logger.error(f"MEXC failed: {e}")
+                    raise
         
-        # 3. Start Monitors
         logger.info("🔍 Starting Detectors...")
         await self.market_analyzer.start()
         await self.pump_detector.start()
@@ -209,22 +237,38 @@ class SystemOrchestrator:
         await self.economic_calendar.start()
         await self.news_bot.start()
         
-        # 4. Start Execution Engines
-        logger.info("💰 Starting Execution Engines...")
+        logger.info("💰 Execution Engines...")
         await self.profit_maximizer.start()
         await self.hedge_manager.start()
         
-        # 5. Register Callbacks (Wiring)
         self._wire_components()
-        
-        # 6. Start Background Loops
         self._start_background_loops()
         
-        logger.info("✨ SYSTEM FULLY OPERATIONAL (53 Modules)")
-        await self.telegram.send_startup_message(len(self.client.symbols))
+        if self.with_dashboard:
+            await self._start_main_dashboard()
         
-        # Keep alive
+        try:
+            await self.telegram.send_startup_message(len(self.client.symbols))
+        except Exception as e:
+            logger.debug(f"Telegram startup msg: {e}")
+        
+        logger.info("✨ FULLY OPERATIONAL (53 Modules)")
+        logger.info("="*60)
         await self._shutdown_event.wait()
+    
+    async def _start_main_dashboard(self):
+        """Start main web dashboard (FastAPI on port 8080)"""
+        try:
+            from dashboard import app, set_components
+            import uvicorn
+            
+            set_components(self.pump_detector, self.market_analyzer, self.mtf_analyzer)
+            config_obj = uvicorn.Config(app, host=config.dashboard.host, port=self.dashboard_port, log_level="warning")
+            self._dashboard_server = uvicorn.Server(config_obj)
+            asyncio.create_task(self._dashboard_server.serve())
+            logger.info(f"🖥️ Dashboard: http://localhost:{self.dashboard_port}")
+        except Exception as e:
+            logger.warning(f"Main dashboard: {e}")
 
     def _wire_components(self):
         """Bind events between modules"""
@@ -281,7 +325,9 @@ class SystemOrchestrator:
         
         self.is_running = False
         
-        # Stop Execution first (safety)
+        if self._dashboard_server and hasattr(self._dashboard_server, 'should_exit'):
+            self._dashboard_server.should_exit = True
+        
         try:
             if hasattr(self.profit_maximizer, 'stop'): await self.profit_maximizer.stop()
         except: pass

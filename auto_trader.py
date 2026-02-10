@@ -123,6 +123,17 @@ class AutoTrader:
         self.demo_balance = initial_balance
         self.demo_pnl = 0
         
+        self.stats = {
+            'orders_placed': 0,
+            'orders_filled': 0,
+            'positions_opened': 0,
+            'positions_closed': 0,
+            'total_pnl_usd': 0,
+            'total_pnl_pct': 0,
+            'wins': 0,
+            'losses': 0
+        }
+        
         if demo_mode:
             saved = load_demo_state()
             if saved:
@@ -150,17 +161,6 @@ class AutoTrader:
         
         self.on_order_filled: Optional[Callable] = None
         self.on_position_closed: Optional[Callable] = None
-        
-        self.stats = {
-            'orders_placed': 0,
-            'orders_filled': 0,
-            'positions_opened': 0,
-            'positions_closed': 0,
-            'total_pnl_usd': 0,
-            'total_pnl_pct': 0,
-            'wins': 0,
-            'losses': 0
-        }
         
         mode = "DEMO" if demo_mode else "REAL"
         log_func = logger.info if demo_mode else logger.warning
