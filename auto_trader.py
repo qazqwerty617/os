@@ -1,6 +1,6 @@
 """
 MEXC Pump Monitor - Auto Trading Engine
-Optimized signal execution engine
+Optimized signal execution engine with Adaptive Exit Management
 """
 
 import asyncio
@@ -10,6 +10,8 @@ from typing import Dict, List, Optional, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+
+from adaptive_exit_manager import exit_manager, AdaptiveExitPlan, ExitPhase
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +57,7 @@ class AutoOrder:
 
 @dataclass
 class Position:
-    """Open position"""
+    """Open position with adaptive exit plan"""
     symbol: str
     side: PositionSide
     entry_price: float
@@ -71,6 +73,10 @@ class Position:
     tp1_filled: bool = False
     tp2_filled: bool = False
     opened_at: datetime = None
+    
+    # Adaptive exit plan
+    exit_plan: Optional[AdaptiveExitPlan] = None
+    closed_portions: float = 0  # Сколько % позиции уже закрыто
     
     def update_pnl(self, current_price: float):
         """Update P&L"""
@@ -190,8 +196,9 @@ class AutoTrader:
         
         return order
     
-    async def _demo_fill_order(self, order: AutoOrder):
-        """Fill order in demo mode"""
+    async def _demo_fill_order(self, order: AutoOrder, price_history: List[float] = None, 
+                               orderbook: dict = None, recent_trades: List[dict] = None):
+        """Fill order in demo mode with adaptive exit plan"""
         order.status = OrderStatus.FILLED
         order.filled_price = order.entry_price
         order.filled_quantity = order.quantity
@@ -207,6 +214,34 @@ class AutoTrader:
             opened_at=datetime.now(),
             leverage=order.leverage
         )
+        
+        # Create adaptive exit plan
+        try:
+            if price_history:
+                exit_plan = await exit_manager.create_exit_plan(
+                    symbol=order.symbol,
+                    side=order.side.value,
+                    entry_price=order.filled_price,
+                    price_history=price_history,
+                    orderbook=orderbook,
+                    recent_trades=recent_trades
+                )
+                position.exit_plan = exit_plan
+                
+                # Update order with smart levels
+                order.stop_loss = exit_plan.stop_loss.price
+                if exit_plan.take_profits:
+                    order.take_profit1 = exit_plan.take_profits[0].price
+                    order.take_profit2 = exit_plan.take_profits[1].price if len(exit_plan.take_profits) > 1 else 0
+                    order.take_profit3 = exit_plan.take_profits[2].price if len(exit_plan.take_profits) > 2 else 0
+                
+                logger.info(f"🎯 Adaptive exit plan created for {order.symbol}")
+                logger.info(f"   Class: {exit_plan.asset_class.value}")
+                logger.info(f"   SL: ${exit_plan.stop_loss.price:.6f} ({exit_plan.stop_loss.trigger_reason})")
+                for i, tp in enumerate(exit_plan.take_profits):
+                    logger.info(f"   TP{i+1}: ${tp.price:.6f} ({tp.size_pct}%)")
+        except Exception as e:
+            logger.warning(f"Could not create adaptive plan: {e}")
         
         self.positions[order.symbol] = position
         self.stats['positions_opened'] += 1
@@ -226,15 +261,51 @@ class AutoTrader:
         """Place real order via MEXC API"""
         logger.warning("Real trading not implemented yet")
     
-    async def update_positions(self, prices: Dict[str, float]):
-        """Update positions with current prices"""
+    async def update_positions(self, prices: Dict[str, float], orderbook_data: Dict[str, dict] = None, 
+                               recent_trades: Dict[str, List[dict]] = None):
+        """Update positions with current prices and adaptive plans"""
         for symbol, position in list(self.positions.items()):
             if symbol in prices:
                 position.update_pnl(prices[symbol])
+                
+                # Update adaptive exit plan if exists
+                if position.exit_plan:
+                    try:
+                        await exit_manager.update_plan(
+                            symbol=symbol,
+                            current_price=prices[symbol],
+                            orderbook=orderbook_data.get(symbol) if orderbook_data else None,
+                            recent_trades=recent_trades.get(symbol) if recent_trades else None
+                        )
+                    except Exception as e:
+                        logger.debug(f"Could not update exit plan for {symbol}: {e}")
+                
                 await self._check_exits(position, prices[symbol])
     
     async def _check_exits(self, position: Position, current_price: float):
-        """Check SL/TP exits"""
+        """Check SL/TP exits using adaptive exit plan"""
+        
+        # Use adaptive exit plan if available
+        if position.exit_plan:
+            exit_signal = exit_manager.check_exits(position.symbol, current_price)
+            if exit_signal:
+                exit_type, price, level = exit_signal
+                close_pct = level.size_pct if level.size_pct > 0 else 100
+                await self._close_position(position, current_price, exit_type, close_pct)
+                return
+            
+            # Check for position adjustment (add/reduce)
+            adjustment = exit_manager.get_position_adjustment(position.symbol, current_price)
+            if adjustment:
+                action, size = adjustment
+                if action == 'ADD_POSITION':
+                    logger.info(f"➕ {position.symbol}: Adding {size*100:.0f}% to position")
+                    # Logic to add to position
+                elif action == 'REDUCE_POSITION':
+                    logger.info(f"➖ {position.symbol}: Reducing position by {size*100:.0f}%")
+                    await self._close_position(position, current_price, 'EARLY_REDUCE', size * 100)
+        
+        # Fallback to basic order levels
         order = next((o for o in self.orders.values() if o.symbol == position.symbol), None)
         if not order:
             return
@@ -245,14 +316,18 @@ class AutoTrader:
             if current_price >= order.stop_loss:
                 close_reason = "STOP_LOSS"
             elif current_price <= order.take_profit1 and not position.tp1_filled:
-                close_reason, close_pct = "TAKE_PROFIT_1", 50
+                close_reason, close_pct = "TAKE_PROFIT_1", 40
                 position.tp1_filled = True
-                # Move stop loss to entry (breakeven)
+                # Move stop loss to entry (breakeven) via exit_manager
+                if position.exit_plan:
+                    position.exit_plan.stop_loss.price = position.entry_price
+                    position.exit_plan.stop_loss.trigger_reason = "Breakeven after TP1"
                 order.stop_loss = position.entry_price
-                logger.info(f"🔒 {position.symbol}: TP1 hit! 50% closed, stop moved to breakeven ({position.entry_price:.6f})")
+                logger.info(f"🔒 {position.symbol}: TP1 hit! 40% closed, stop moved to breakeven ({position.entry_price:.6f})")
             elif current_price <= order.take_profit2 and not position.tp2_filled:
-                close_reason, close_pct = "TAKE_PROFIT_2", 50  # Close remaining 50%
+                close_reason, close_pct = "TAKE_PROFIT_2", 35
                 position.tp2_filled = True
+                logger.info(f"🔒 {position.symbol}: TP2 hit! 35% closed")
             elif current_price <= order.take_profit3:
                 close_reason = "TAKE_PROFIT_3"
         
@@ -266,7 +341,7 @@ class AutoTrader:
         reason: str,
         close_pct: float = 100
     ):
-        """Close position"""
+        """Close position with adaptive tracking"""
         if position.side == PositionSide.SHORT:
             pnl_pct = (position.entry_price - exit_price) / position.entry_price * 100
         else:
@@ -280,6 +355,9 @@ class AutoTrader:
         
         self.demo_balance += close_quantity * exit_price + pnl_usd
         self.demo_pnl += pnl_usd
+        
+        # Track closed portions
+        position.closed_portions += close_pct
         
         # Update Dashboard
         if self.dashboard:
@@ -296,9 +374,12 @@ class AutoTrader:
             )
         
         emoji = '✅' if pnl_pct > 0 else '❌'
-        logger.info(f"{emoji} Closed: {position.symbol} | P&L: {pnl_pct:+.2f}% (${pnl_usd:+.2f}) | {reason}")
+        logger.info(f"{emoji} Closed: {position.symbol} | {reason} | {close_pct:.0f}% | P&L: {pnl_pct:+.2f}% (${pnl_usd:+.2f})")
         
-        if close_pct >= 100 or reason == "STOP_LOSS":
+        if close_pct >= 100 or reason == "STOP_LOSS" or position.closed_portions >= 99:
+            # Remove exit plan and position
+            if position.exit_plan:
+                exit_manager.remove_plan(position.symbol)
             del self.positions[position.symbol]
             self.stats['positions_closed'] += 1
             
@@ -306,6 +387,7 @@ class AutoTrader:
                 await self.on_position_closed(position, pnl_pct, pnl_usd, reason)
         else:
             position.quantity -= close_quantity
+            logger.info(f"📊 {position.symbol}: Position reduced to {position.quantity:.4f} ({100-position.closed_portions:.0f}% remaining)")
     
     async def close_all_positions(self, prices: Dict[str, float]):
         """Close all positions"""

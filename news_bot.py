@@ -34,6 +34,7 @@ class NewsSource(Enum):
     WHALE_ALERT = "whale_alert"
     COINDAR = "coindar"
     WATCHER_GURU = "watcher_guru"
+    TRADINGVIEW = "tradingview"
 
 
 class NewsSentiment(Enum):
@@ -122,6 +123,7 @@ class NewsBot:
         NewsSource.THEBLOCK: "https://www.theblock.co/rss.xml",
         NewsSource.DECRYPT: "https://decrypt.co/feed",
         NewsSource.WATCHER_GURU: "https://watcher.guru/news/feed", # Direct fast news
+        NewsSource.TRADINGVIEW: "https://www.tradingview.com/news/feed/", # TradingView news
     }
     
     SEEN_IDS_FILE = "data/seen_news_ids.json"
@@ -132,10 +134,14 @@ class NewsBot:
         
         # News storage (Optimized for VPS with limited RAM)
         self.news: List[NewsItem] = []
-        self.max_news = 500  # Reduced from 2000 to prevent RAM exhaustion
+        self.max_news = 200  # Reduced from 500 to save RAM
+        
+        # Connection pool limit
+        self._request_semaphore = asyncio.Semaphore(5)  # Max 5 concurrent requests
         
         # Seen news (to avoid duplicates) - load from disk
         self._seen_ids: set = self._load_seen_ids()
+        self._max_seen_ids = 1500  # Hard limit for memory
         
         # Callbacks
         self._callbacks: List[Callable] = []
@@ -179,14 +185,26 @@ class NewsBot:
         except Exception as e:
             logger.debug(f"Could not save seen IDs: {e}")
     
+    def _trim_seen_ids(self):
+        """Trim seen IDs in memory to prevent RAM exhaustion"""
+        if len(self._seen_ids) > self._max_seen_ids:
+            # Convert to list, keep last 1000, convert back to set
+            self._seen_ids = set(list(self._seen_ids)[-1000:])
+            logger.debug(f"Trimmed _seen_ids to {len(self._seen_ids)} items")
+
     async def _get_session(self) -> aiohttp.ClientSession:
-        """Get aiohttp session"""
+        """Get aiohttp session with connection limits"""
         if self._session is None or self._session.closed:
             import ssl
             ssl_context = ssl.create_default_context()
             ssl_context.check_hostname = False
             ssl_context.verify_mode = ssl.CERT_NONE
-            connector = aiohttp.TCPConnector(ssl=ssl_context)
+            # Limit connections to prevent memory/connection exhaustion
+            connector = aiohttp.TCPConnector(
+                ssl=ssl_context,
+                limit=10,  # Max 10 total connections
+                limit_per_host=3  # Max 3 per host
+            )
             self._session = aiohttp.ClientSession(connector=connector)
         return self._session
     
@@ -208,15 +226,26 @@ class NewsBot:
     
     async def _fetch_loop(self):
         """Цикл получения новостей"""
+        import gc
         heartbeat_counter = 0
+        gc_counter = 0
         while self._running:
             try:
                 await self._fetch_all_sources()
                 self._save_seen_ids()  # Persist seen IDs to disk
+                self._trim_seen_ids()  # Trim in-memory set
                 heartbeat_counter += 1
+                gc_counter += 1
+                
+                # GC every 10 iterations (10 minutes)
+                if gc_counter >= 10:
+                    gc.collect()
+                    gc_counter = 0
+                    logger.debug("🧹 Garbage collected")
+                
                 # Heartbeat каждые 30 минут (30 итераций по 60 сек)
                 if heartbeat_counter >= 30:
-                    logger.info(f"📰 NEWS BOT ALIVE | Fetched: {self.stats['news_fetched']} | Alerts: {self.stats['alerts_sent']}")
+                    logger.info(f"📰 NEWS BOT ALIVE | Fetched: {self.stats['news_fetched']} | Alerts: {self.stats['alerts_sent']} | News: {len(self.news)} | Seen: {len(self._seen_ids)}")
                     heartbeat_counter = 0
                 await asyncio.sleep(60)  # Every 1 minute (Freshest news)
             except asyncio.CancelledError:
@@ -234,6 +263,7 @@ class NewsBot:
             self._fetch_rss_source(NewsSource.THEBLOCK),
             self._fetch_rss_source(NewsSource.DECRYPT),
             self._fetch_rss_source(NewsSource.WATCHER_GURU),
+            self._fetch_tradingview(),
             self._fetch_whale_alert(),
             self._fetch_coindar()
         ]
@@ -243,13 +273,14 @@ class NewsBot:
     async def _fetch_coindesk(self):
         """Получить новости с CoinDesk"""
         try:
-            session = await self._get_session()
-            url = "https://www.coindesk.com/arc/outboundfeeds/rss/"
-            
-            async with session.get(url, timeout=30) as resp:
-                if resp.status == 200:
-                    text = await resp.text()
-                    await self._parse_rss(text, NewsSource.COINDESK)
+            async with self._request_semaphore:
+                session = await self._get_session()
+                url = "https://www.coindesk.com/arc/outboundfeeds/rss/"
+                
+                async with session.get(url, timeout=30) as resp:
+                    if resp.status == 200:
+                        text = await resp.text()
+                        await self._parse_rss(text, NewsSource.COINDESK)
                     
         except Exception as e:
             logger.debug(f"CoinDesk fetch failed: {e}")
@@ -257,13 +288,14 @@ class NewsBot:
     async def _fetch_cointelegraph(self):
         """Получить новости с CoinTelegraph"""
         try:
-            session = await self._get_session()
-            url = "https://cointelegraph.com/rss"
-            
-            async with session.get(url, timeout=30) as resp:
-                if resp.status == 200:
-                    text = await resp.text()
-                    await self._parse_rss(text, NewsSource.COINTELEGRAPH)
+            async with self._request_semaphore:
+                session = await self._get_session()
+                url = "https://cointelegraph.com/rss"
+                
+                async with session.get(url, timeout=30) as resp:
+                    if resp.status == 200:
+                        text = await resp.text()
+                        await self._parse_rss(text, NewsSource.COINTELEGRAPH)
                     
         except Exception as e:
             logger.debug(f"CoinTelegraph fetch failed: {e}")
@@ -271,26 +303,43 @@ class NewsBot:
     async def _fetch_cryptopanic_rss(self):
         """Получить новости с CryptoPanic (Агрегатор Twitter/Reddit/News)"""
         try:
-            session = await self._get_session()
-            url = self.RSS_FEEDS[NewsSource.CRYPTONEWS]
-            async with session.get(url, timeout=30) as resp:
-                if resp.status == 200:
-                    text = await resp.text()
-                    await self._parse_rss(text, NewsSource.CRYPTONEWS)
+            async with self._request_semaphore:
+                session = await self._get_session()
+                url = self.RSS_FEEDS[NewsSource.CRYPTONEWS]
+                async with session.get(url, timeout=30) as resp:
+                    if resp.status == 200:
+                        text = await resp.text()
+                        await self._parse_rss(text, NewsSource.CRYPTONEWS)
         except Exception as e:
             logger.debug(f"CryptoPanic fetch failed: {e}")
+
+    async def _fetch_tradingview(self):
+        """Получить новости с TradingView (технический анализ и рыночные инсайты)"""
+        try:
+            async with self._request_semaphore:
+                session = await self._get_session()
+                url = self.RSS_FEEDS[NewsSource.TRADINGVIEW]
+
+                async with session.get(url, timeout=30) as resp:
+                    if resp.status == 200:
+                        text = await resp.text()
+                        await self._parse_rss(text, NewsSource.TRADINGVIEW)
+
+        except Exception as e:
+            logger.debug(f"TradingView fetch failed: {e}")
 
     async def _fetch_rss_source(self, source: NewsSource):
         """Универсальный загрузчик для RSS"""
         try:
-            session = await self._get_session()
-            url = self.RSS_FEEDS.get(source)
-            if not url: return
-            
-            async with session.get(url, timeout=30) as resp:
-                if resp.status == 200:
-                    text = await resp.text()
-                    await self._parse_rss(text, source)
+            async with self._request_semaphore:
+                session = await self._get_session()
+                url = self.RSS_FEEDS.get(source)
+                if not url: return
+                
+                async with session.get(url, timeout=30) as resp:
+                    if resp.status == 200:
+                        text = await resp.text()
+                        await self._parse_rss(text, source)
         except Exception as e:
             logger.debug(f"RSS source {source.value} fetch failed: {e}")
 
@@ -305,42 +354,43 @@ class NewsBot:
             start_time = int(time.time()) - 600
             url = f"https://api.whale-alert.io/v1/transactions?api_key={api_key}&min_value=1000000&start={start_time}"
             
-            session = await self._get_session()
-            async with session.get(url, timeout=15) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    for tx in data.get('transactions', []):
-                        tx_id = f"whale_{tx.get('hash')}"
-                        if tx_id in self._seen_ids: continue
-                        self._seen_ids.add(tx_id)
-                        
-                        symbol = tx.get('symbol', '').upper()
-                        amount = round(tx.get('amount', 0), 2)
-                        usd_value = round(tx.get('amount_usd', 0), 0)
-                        from_addr = tx.get('from', {}).get('owner_type', 'unknown')
-                        to_addr = tx.get('to', {}).get('owner_type', 'unknown')
-                        
-                        # Формируем заголовок для AI
-                        title = f"WHALE: {amount} {symbol} (${usd_value:,.0f}) from {from_addr} to {to_addr}"
-                        
-                        # AI должен понять: inflow к бирже = падение, outflow от биржи = рост
-                        ai_analysis = await self._analyze_with_groq(title, "Whale tracking alert", [symbol])
-                        
-                        news = NewsItem(
-                            news_id=tx_id,
-                            source=NewsSource.WHALE_ALERT,
-                            title=title,
-                            summary=f"Hash: {tx.get('hash')}",
-                            url=f"https://whale-alert.io/transaction/ethereum/{tx.get('hash')}", # simplified
-                            timestamp=int(time.time() * 1000),
-                            sentiment=NewsSentiment(ai_analysis['sentiment']) if ai_analysis else NewsSentiment.NEUTRAL,
-                            sentiment_score=ai_analysis['score'] if ai_analysis else 0,
-                            mentioned_tokens=[symbol],
-                            importance=ai_analysis['importance'] if ai_analysis else 70
-                        )
-                        self.news.append(news)
-                        if news.importance >= 80:
-                             await self._send_alert(news)
+            async with self._request_semaphore:
+                session = await self._get_session()
+                async with session.get(url, timeout=15) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        for tx in data.get('transactions', []):
+                            tx_id = f"whale_{tx.get('hash')}"
+                            if tx_id in self._seen_ids: continue
+                            self._seen_ids.add(tx_id)
+                            
+                            symbol = tx.get('symbol', '').upper()
+                            amount = round(tx.get('amount', 0), 2)
+                            usd_value = round(tx.get('amount_usd', 0), 0)
+                            from_addr = tx.get('from', {}).get('owner_type', 'unknown')
+                            to_addr = tx.get('to', {}).get('owner_type', 'unknown')
+                            
+                            # Формируем заголовок для AI
+                            title = f"WHALE: {amount} {symbol} (${usd_value:,.0f}) from {from_addr} to {to_addr}"
+                            
+                            # AI должен понять: inflow к бирже = падение, outflow от биржи = рост
+                            ai_analysis = await self._analyze_with_groq(title, "Whale tracking alert", [symbol])
+                            
+                            news = NewsItem(
+                                news_id=tx_id,
+                                source=NewsSource.WHALE_ALERT,
+                                title=title,
+                                summary=f"Hash: {tx.get('hash')}",
+                                url=f"https://whale-alert.io/transaction/ethereum/{tx.get('hash')}", # simplified
+                                timestamp=int(time.time() * 1000),
+                                sentiment=NewsSentiment(ai_analysis['sentiment']) if ai_analysis else NewsSentiment.NEUTRAL,
+                                sentiment_score=ai_analysis['score'] if ai_analysis else 0,
+                                mentioned_tokens=[symbol],
+                                importance=ai_analysis['importance'] if ai_analysis else 70
+                            )
+                            self.news.append(news)
+                            if news.importance >= 80:
+                                 await self._send_alert(news)
         except Exception as e:
             logger.debug(f"Whale Alert fetch failed: {e}")
 
@@ -353,35 +403,36 @@ class NewsBot:
                 
             url = f"https://coindar.org/api/v2/events?access_token={api_key}&page=1&page_size=10&order_by=date_start&order_direction=asc"
             
-            session = await self._get_session()
-            async with session.get(url, timeout=15) as resp:
-                if resp.status == 200:
-                    events = await resp.json()
-                    for ev in events:
-                        ev_id = f"coindar_{ev.get('id')}"
-                        if ev_id in self._seen_ids: continue
-                        self._seen_ids.add(ev_id)
-                        
-                        title = f"EVENT: {ev.get('caption')} ({ev.get('coin_symbol')})"
-                        tokens = [ev.get('coin_symbol', '').upper()]
-                        
-                        ai_analysis = await self._analyze_with_groq(title, ev.get('source', ''), tokens)
-                        
-                        news = NewsItem(
-                            news_id=ev_id,
-                            source=NewsSource.COINDAR,
-                            title=title,
-                            summary=ev.get('caption', ''),
-                            url=ev.get('source', 'https://coindar.org'),
-                            timestamp=int(time.time() * 1000),
-                            sentiment=NewsSentiment(ai_analysis['sentiment']) if ai_analysis else NewsSentiment.NEUTRAL,
-                            sentiment_score=ai_analysis['score'] if ai_analysis else 0,
-                            mentioned_tokens=tokens,
-                            importance=ai_analysis['importance'] if ai_analysis else 60
-                        )
-                        self.news.append(news)
-                        if news.importance >= 80:
-                             await self._send_alert(news)
+            async with self._request_semaphore:
+                session = await self._get_session()
+                async with session.get(url, timeout=15) as resp:
+                    if resp.status == 200:
+                        events = await resp.json()
+                        for ev in events:
+                            ev_id = f"coindar_{ev.get('id')}"
+                            if ev_id in self._seen_ids: continue
+                            self._seen_ids.add(ev_id)
+                            
+                            title = f"EVENT: {ev.get('caption')} ({ev.get('coin_symbol')})"
+                            tokens = [ev.get('coin_symbol', '').upper()]
+                            
+                            ai_analysis = await self._analyze_with_groq(title, ev.get('source', ''), tokens)
+                            
+                            news = NewsItem(
+                                news_id=ev_id,
+                                source=NewsSource.COINDAR,
+                                title=title,
+                                summary=ev.get('caption', ''),
+                                url=ev.get('source', 'https://coindar.org'),
+                                timestamp=int(time.time() * 1000),
+                                sentiment=NewsSentiment(ai_analysis['sentiment']) if ai_analysis else NewsSentiment.NEUTRAL,
+                                sentiment_score=ai_analysis['score'] if ai_analysis else 0,
+                                mentioned_tokens=tokens,
+                                importance=ai_analysis['importance'] if ai_analysis else 60
+                            )
+                            self.news.append(news)
+                            if news.importance >= 80:
+                                 await self._send_alert(news)
         except Exception as e:
             logger.debug(f"Coindar fetch failed: {e}")
 
