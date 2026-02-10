@@ -5,8 +5,9 @@ MEXC Pump Monitor - News Bot
 
 import asyncio
 import logging
-import time
+import os
 import re
+import time
 import aiohttp
 from typing import Dict, List, Optional, Callable, Tuple
 from dataclasses import dataclass, field
@@ -192,6 +193,21 @@ class NewsBot:
             self._seen_ids = set(list(self._seen_ids)[-1000:])
             logger.debug(f"Trimmed _seen_ids to {len(self._seen_ids)} items")
 
+    async def _fetch_url_retry(self, url: str, timeout: int = 30, retries: int = 2) -> Optional[str]:
+        """Fetch URL with retry and exponential backoff"""
+        for attempt in range(retries + 1):
+            try:
+                session = await self._get_session()
+                async with session.get(url, timeout=timeout) as resp:
+                    if resp.status == 200:
+                        return await resp.text()
+            except Exception as e:
+                if attempt < retries:
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                else:
+                    logger.debug(f"Fetch failed {url[:50]}...: {e}")
+        return None
+    
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get aiohttp session with connection limits"""
         if self._session is None or self._session.closed:
@@ -223,6 +239,16 @@ class NewsBot:
     def on_news(self, callback: Callable):
         """Подписаться на новости"""
         self._callbacks.append(callback)
+    
+    async def _notify_callbacks(self, news: 'NewsItem'):
+        for cb in self._callbacks:
+            try:
+                if asyncio.iscoroutinefunction(cb):
+                    await cb(news)
+                else:
+                    cb(news)
+            except Exception as e:
+                logger.debug(f"News callback: {e}")
     
     async def _fetch_loop(self):
         """Цикл получения новостей"""
@@ -272,33 +298,17 @@ class NewsBot:
     
     async def _fetch_coindesk(self):
         """Получить новости с CoinDesk"""
-        try:
-            async with self._request_semaphore:
-                session = await self._get_session()
-                url = "https://www.coindesk.com/arc/outboundfeeds/rss/"
-                
-                async with session.get(url, timeout=30) as resp:
-                    if resp.status == 200:
-                        text = await resp.text()
-                        await self._parse_rss(text, NewsSource.COINDESK)
-                    
-        except Exception as e:
-            logger.debug(f"CoinDesk fetch failed: {e}")
+        async with self._request_semaphore:
+            text = await self._fetch_url_retry("https://www.coindesk.com/arc/outboundfeeds/rss/")
+            if text:
+                await self._parse_rss(text, NewsSource.COINDESK)
     
     async def _fetch_cointelegraph(self):
         """Получить новости с CoinTelegraph"""
-        try:
-            async with self._request_semaphore:
-                session = await self._get_session()
-                url = "https://cointelegraph.com/rss"
-                
-                async with session.get(url, timeout=30) as resp:
-                    if resp.status == 200:
-                        text = await resp.text()
-                        await self._parse_rss(text, NewsSource.COINTELEGRAPH)
-                    
-        except Exception as e:
-            logger.debug(f"CoinTelegraph fetch failed: {e}")
+        async with self._request_semaphore:
+            text = await self._fetch_url_retry("https://cointelegraph.com/rss")
+            if text:
+                await self._parse_rss(text, NewsSource.COINTELEGRAPH)
     
     async def _fetch_cryptopanic_rss(self):
         """Получить новости с CryptoPanic (Агрегатор Twitter/Reddit/News)"""
@@ -512,6 +522,7 @@ class NewsBot:
                         
                         if importance >= 80:
                             await self._send_alert(news)
+                        await self._notify_callbacks(news)
                             
         except Exception as e:
             logger.debug(f"CryptoPanic API fetch failed: {e}")
@@ -621,23 +632,12 @@ class NewsBot:
                 if importance >= 90 and reliability >= 85:
                     await self._send_alert(news)
                 elif "BINANCE" in title.upper() and "LISTING" in title.upper():
-                    # Special case for manual detection if AI is slow
                     await self._send_alert(news)
                 
-                # Notify callbacks
-                for cb in self._callbacks:
-                    try:
-                        if asyncio.iscoroutinefunction(cb):
-                            await cb(news)
-                        else:
-                            cb(news)
-                    except Exception as e:
-                        logger.error(f"News callback error: {e}")
+                await self._notify_callbacks(news)
             
-            # Cleanup old
             if len(self.news) > self.max_news:
                 self.news = self.news[-self.max_news:]
-                
         except Exception as e:
             logger.error(f"RSS parse error: {e}")
     

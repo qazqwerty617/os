@@ -24,7 +24,8 @@ logger = logging.getLogger("Main")
 
 async def run_monitor_only(args):
     """Run only the monitor (no dashboard)"""
-    orchestrator = SystemOrchestrator(capital=args.capital, risk_level=args.risk)
+    capital = args.capital if args.capital is not None else config.demo.initial_balance
+    orchestrator = SystemOrchestrator(capital=capital, risk_level=args.risk)
     
     # Signal handling (Windows compatible)
     if sys.platform != 'win32':
@@ -37,9 +38,13 @@ async def run_monitor_only(args):
 async def run_with_dashboard(args):
     """Run monitor + dashboard"""
     import uvicorn
-    from dashboard import app
+    from dashboard import app, set_components
     
-    orchestrator = SystemOrchestrator(capital=args.capital, risk_level=args.risk)
+    capital = args.capital if args.capital is not None else config.demo.initial_balance
+    orchestrator = SystemOrchestrator(capital=capital, risk_level=args.risk)
+    
+    # Connect main dashboard to pump_detector (port 8080)
+    set_components(orchestrator.pump_detector, orchestrator.market_analyzer, orchestrator.mtf_analyzer)
     
     # Start orchestrator in background
     orchestrator_task = asyncio.create_task(orchestrator.start())
@@ -104,7 +109,8 @@ def main():
     parser = argparse.ArgumentParser(description='MEXC Pump Monitor - Genius Edition')
     parser.add_argument('--mode', choices=['monitor', 'dashboard', 'both', 'backtest'], default='both')
     parser.add_argument('--port', type=int, default=config.dashboard.port)
-    parser.add_argument('--capital', type=float, default=100.0)
+    parser.add_argument('--capital', type=float, default=None,
+                        help='Capital for risk/backtest. Demo balance uses config.demo.initial_balance ($100)')
     parser.add_argument('--risk', choices=['conservative', 'moderate', 'aggressive', 'degen'], default='moderate')
     parser.add_argument('--debug', action='store_true')
     

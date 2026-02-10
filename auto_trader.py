@@ -12,6 +12,7 @@ from datetime import datetime
 from enum import Enum
 
 from adaptive_exit_manager import exit_manager, AdaptiveExitPlan, ExitPhase
+from demo_persistence import load_demo_state, save_demo_state
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +122,31 @@ class AutoTrader:
         
         self.demo_balance = initial_balance
         self.demo_pnl = 0
+        
+        if demo_mode:
+            saved = load_demo_state()
+            if saved:
+                self.demo_balance = saved.get("demo_balance", initial_balance)
+                self.demo_pnl = saved.get("demo_pnl", 0)
+                for k, v in saved.get("stats", {}).items():
+                    if k in self.stats:
+                        self.stats[k] = v
+                for o in saved.get("order_history", []):
+                    ord = AutoOrder(
+                        order_id=o.get("order_id", ""),
+                        symbol=o.get("symbol", ""),
+                        side=PositionSide.SHORT if o.get("side") == "SHORT" else PositionSide.LONG,
+                        entry_price=o.get("entry_price", 0),
+                        quantity=o.get("quantity", 0),
+                        stop_loss=0, take_profit1=0,
+                        filled_price=o.get("filled_price", 0),
+                        filled_quantity=o.get("filled_quantity", 0),
+                        realized_pnl=o.get("realized_pnl", 0),
+                        status=OrderStatus.FILLED,
+                        signal_source=o.get("signal_source", ""),
+                    )
+                    self.order_history.append(ord)
+                logger.info(f"📂 Demo state restored: ${self.demo_balance:.2f}, {len(self.order_history)} trades")
         
         self.on_order_filled: Optional[Callable] = None
         self.on_position_closed: Optional[Callable] = None
@@ -350,6 +376,14 @@ class AutoTrader:
         close_quantity = position.quantity * (close_pct / 100)
         pnl_usd = close_quantity * position.entry_price * (pnl_pct / 100)
         
+        if close_pct >= 100:
+            for oid, ord in list(self.orders.items()):
+                if ord.symbol == position.symbol:
+                    ord.realized_pnl = pnl_usd
+                    self.order_history.append(ord)
+                    del self.orders[oid]
+                    break
+        
         self.stats['total_pnl_usd'] += pnl_usd
         self.stats['wins' if pnl_pct > 0 else 'losses'] += 1
         
@@ -377,11 +411,12 @@ class AutoTrader:
         logger.info(f"{emoji} Closed: {position.symbol} | {reason} | {close_pct:.0f}% | P&L: {pnl_pct:+.2f}% (${pnl_usd:+.2f})")
         
         if close_pct >= 100 or reason == "STOP_LOSS" or position.closed_portions >= 99:
-            # Remove exit plan and position
             if position.exit_plan:
                 exit_manager.remove_plan(position.symbol)
             del self.positions[position.symbol]
             self.stats['positions_closed'] += 1
+            if self.demo_mode:
+                save_demo_state(self.demo_balance, self.demo_pnl, self.order_history, self.stats)
             
             if self.on_position_closed:
                 await self.on_position_closed(position, pnl_pct, pnl_usd, reason)

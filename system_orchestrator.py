@@ -55,7 +55,7 @@ from self_learning import SelfLearningEngine
 from listings_detector import NewListingsDetector, TokenomicsFetcher
 from pnl_reporter import PnLReporter
 from news_parser import CryptoNewsParser
-from news_bot import NewsBot
+from news_bot import NewsBot, NewsSentiment
 from mobile_dashboard import MobileDashboard
 from contract_scanner import ContractScanner
 from economic_calendar import EconomicCalendar
@@ -67,6 +67,7 @@ from profit_maximizer import ProfitMaximizer
 from hedge_manager import HedgeManager
 from smart_levels import SmartLevelsCalculator
 from global_listings import GlobalListingWatcher
+from indicators import calculate_all_indicators
 
 logger = logging.getLogger("Orchestrator")
 
@@ -133,7 +134,7 @@ class SystemOrchestrator:
         self.auto_trader = AutoTrader(
             demo_mode=True, 
             max_positions=8, 
-            initial_balance=capital,
+            initial_balance=config.demo.initial_balance,
             dashboard=self.mobile_dashboard
         )
         self.self_learning = SelfLearningEngine()
@@ -233,6 +234,24 @@ class SystemOrchestrator:
         self.listings_detector.on_new_listing(self._on_new_listing)
         self.global_listings.on_new_listing(self.news_bot.handle_external_listing)
         
+        def _on_news_to_dashboard(news):
+            try:
+                sig = "NEUTRAL"
+                if hasattr(news, 'sentiment') and news.sentiment in (NewsSentiment.VERY_BULLISH, NewsSentiment.BULLISH):
+                    sig = "LONG"
+                elif hasattr(news, 'sentiment') and news.sentiment in (NewsSentiment.VERY_BEARISH, NewsSentiment.BEARISH):
+                    sig = "SHORT"
+                elif getattr(news, 'signal_text', ''):
+                    sig = "LONG" if "LONG" in news.signal_text else "SHORT" if "SHORT" in news.signal_text else "NEUTRAL"
+                src = news.source.value if hasattr(news.source, 'value') else str(news.source)
+                ts = getattr(news, 'timestamp', 0) or 0
+                age = (time.time() * 1000 - ts) / 60000
+                time_ago = f"{int(age)} мин" if age < 60 else f"{age/60:.0f}ч"
+                self.mobile_dashboard.add_news(sig, news.title[:100], src, time_ago)
+            except Exception as e:
+                logger.debug(f"News to dashboard: {e}")
+        self.news_bot.on_news(_on_news_to_dashboard)
+        
         # Subscribe monitors to health checks
         self.health_monitor.register_component('Orchestrator', lambda: self.is_running)
 
@@ -271,10 +290,8 @@ class SystemOrchestrator:
             if hasattr(self.hedge_manager, 'stop'): await self.hedge_manager.stop()
         except: pass
         
-        # Stop Monitors
         modules_to_stop = [
             self.market_analyzer, self.listings_detector, self.global_listings, self.tokenomics,
-            self.contract_scanner, self.economic_calendar, self.news_bot,
             self.contract_scanner, self.economic_calendar, self.news_bot,
             self.mobile_dashboard, self.health_monitor, self.telegram_commands
         ]
@@ -285,6 +302,14 @@ class SystemOrchestrator:
             except Exception as e:
                 logger.warning(f"Error stopping {mod}: {e}")
         
+        if hasattr(self, 'auto_trader') and self.auto_trader and self.auto_trader.demo_mode:
+            from demo_persistence import save_demo_state
+            save_demo_state(
+                self.auto_trader.demo_balance,
+                self.auto_trader.demo_pnl,
+                self.auto_trader.order_history,
+                self.auto_trader.stats,
+            )
         await event_bus.stop()
         await self.client.stop()
         
@@ -301,6 +326,19 @@ class SystemOrchestrator:
         
         logger.info(f"🎯 PUMP: {symbol} +{pump_signal.price_change_pct:.1f}%")
         self.smart_filter.record_pump(symbol)
+        
+        rsi_val = 50.0
+        hist = self.pump_detector.history.get(symbol)
+        if hist and len(hist.prices) >= 14 and hist.volumes:
+            try:
+                rsi_val = calculate_all_indicators(hist.prices, hist.volumes, hist.volumes[-1]).rsi
+            except Exception:
+                pass
+        vol_mult = min(pump_signal.volume_usd / 1e6, 99.9) if pump_signal.volume_usd else 1
+        self.mobile_dashboard.add_signal(
+            symbol=symbol, side='LONG', change=pump_signal.price_change_pct,
+            score=pump_signal.score, rsi=rsi_val, volume=vol_mult, pnl=0
+        )
         
         # 💎 Fetch Market Cap
         base_asset = symbol.split('_')[0] if '_' in symbol else symbol.replace('USDT', '')
@@ -446,6 +484,14 @@ class SystemOrchestrator:
                  msg = entry_obj.format_telegram()
                  await self.telegram.send_message(msg)
                  
+                 # Mobile dashboard: add SHORT signal
+                 vol = min(pump_signal.volume_usd / 1e6, 99.9) if pump_signal.volume_usd else 1
+                 self.mobile_dashboard.add_signal(
+                     symbol=symbol, side='SHORT', change=pump_signal.price_change_pct,
+                     score=entry_obj.confidence if hasattr(entry_obj, 'confidence') else 80,
+                     rsi=rsi_val, volume=vol, pnl=0
+                 )
+                 
                  # AUTO DEMO TRADE: Place short order
                  await self.auto_trader.place_short_order(
                      symbol=symbol,
@@ -539,6 +585,15 @@ class SystemOrchestrator:
         
         from dashboard import broadcast_signal
         await broadcast_signal(signal)
+        
+        # Mobile dashboard: add enhanced signal
+        side = 'SHORT' if 'SHORT' in (signal.quality.value or '') else 'LONG'
+        self.mobile_dashboard.add_signal(
+            symbol=signal.symbol, side=side,
+            change=signal.price_change_pct if hasattr(signal, 'price_change_pct') else 0,
+            score=signal.final_score, rsi=getattr(signal, 'rsi', 50),
+            volume=getattr(signal, 'volume_multiplier', 1) or 1, pnl=0
+        )
 
     async def _on_whale_detected(self, order):
         self.stats['whales_detected'] += 1
@@ -652,23 +707,52 @@ class SystemOrchestrator:
                 # 1. Update Main Dashboard (WebSocket)
                 await broadcast_update()
                 
-                # 2. Update Mobile Dashboard
                 if hasattr(self, 'auto_trader') and self.auto_trader:
+                    at = self.auto_trader
+                    wins = at.stats.get('wins', 0)
+                    losses = at.stats.get('losses', 0)
+                    wr = (wins / (wins + losses) * 100) if (wins + losses) > 0 else 0
+                    gp, gl = 0.0, 0.0
+                    for o in at.order_history:
+                        pnl = getattr(o, 'realized_pnl', 0)
+                        if pnl > 0: gp += pnl
+                        elif pnl < 0: gl -= pnl
+                    pf = round(gp / gl, 2) if gl > 0 else (gp if gp > 0 else 0)
                     self.mobile_dashboard.update_stats(
-                        balance=self.auto_trader.demo_balance,
+                        balance=at.demo_balance,
                         pumps=self.stats.get('signals_generated', 0),
-                        winrate=self.self_learning.stats.win_rate * 100 if hasattr(self.self_learning, 'stats') else 0,
-                        total_trades=len(self.auto_trader.order_history)
+                        signals=len(self.mobile_dashboard.data['signals']),
+                        winrate=wr,
+                        total_trades=len(at.order_history),
+                        wins=wins, losses=losses, profit_factor=pf
                     )
+                    self.mobile_dashboard.data['trades'] = []
+                    for o in at.order_history[-100:]:
+                        dt = getattr(o, 'filled_at', None) or getattr(o, 'created_at', None)
+                        self.mobile_dashboard.data['trades'].append({
+                            'symbol': o.symbol, 'side': o.side.value,
+                            'entry': o.filled_price or o.entry_price,
+                            'qty': o.filled_quantity or o.quantity,
+                            'pnl': getattr(o, 'realized_pnl', 0),
+                            'time': dt.isoformat() if dt else ''
+                        })
                     
-                    # Also update PnL on mobile
                     self.mobile_dashboard.update_pnl(
-                        today=self.auto_trader.demo_pnl,
-                        all_time=self.auto_trader.demo_pnl,
-                        trades=len(self.auto_trader.order_history)
+                        today=at.demo_pnl,
+                        all_time=at.demo_pnl,
+                        trades=len(at.order_history),
+                        balance=at.demo_balance
                     )
+                    await self.mobile_dashboard._broadcast_ws()
+                    if not hasattr(self, '_demo_save_counter'):
+                        self._demo_save_counter = 0
+                    self._demo_save_counter += 1
+                    if self._demo_save_counter >= 20:
+                        self._demo_save_counter = 0
+                        from demo_persistence import save_demo_state
+                        save_demo_state(at.demo_balance, at.demo_pnl, at.order_history, at.stats)
                 
-                await asyncio.sleep(2)
+                await asyncio.sleep(3)
             except Exception as e:
                 logger.debug(f"Dashboard sync error: {e}")
                 await asyncio.sleep(5)

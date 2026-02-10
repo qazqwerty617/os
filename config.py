@@ -179,6 +179,20 @@ class GroqConfig:
             logger.warning("⚠️ No Groq API keys found in environment")
 
 @dataclass
+class DemoConfig:
+    """Demo trading settings"""
+    initial_balance: float = 100.0  # Начальный баланс для демо ($100)
+    
+    def __post_init__(self):
+        val = os.getenv('DEMO_BALANCE')
+        if val is not None:
+            try:
+                self.initial_balance = float(val)
+            except ValueError:
+                pass
+
+
+@dataclass
 class DashboardConfig:
     """Web dashboard settings"""
     host: str = "0.0.0.0"
@@ -195,13 +209,13 @@ class Config:
     
     def __init__(self):
         self.pump = PumpConfig()
+        self.demo = DemoConfig()
         self.scoring = ScoringConfig()
         self.filters = FilterConfig()
         self.mexc = MEXCConfig()
         self.telegram = TelegramConfig()
         self.openrouter = OpenRouterConfig()
         self.groq = GroqConfig()
-        self.dashboard = DashboardConfig()
         self.dashboard = DashboardConfig()
         
         # Logging

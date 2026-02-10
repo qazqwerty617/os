@@ -77,10 +77,10 @@ class MEXCClient:
         self._request_interval = 0.05
         self._request_count = 0
         
-        # Stats
         self.stats = {
             'requests_made': 0,
             'requests_failed': 0,
+            'rate_limited': 0,
             'start_time': time.time()
         }
 
@@ -126,6 +126,7 @@ class MEXCClient:
         if elapsed < self._request_interval:
             await asyncio.sleep(self._request_interval - elapsed)
         self._last_request_time = time.time()
+        self._request_count += 1
     
     async def _request(
         self,
@@ -146,8 +147,9 @@ class MEXCClient:
                     if resp.status == 200:
                         return await resp.json()
                     elif resp.status == 429:
-                        # Rate limited - exponential backoff
-                        wait_time = (attempt + 1) * 0.5
+                        self.stats['rate_limited'] += 1
+                        wait_time = (attempt + 1) * 1.0
+                        logger.warning(f"⚠️ MEXC rate limit (429), waiting {wait_time:.0f}s")
                         await asyncio.sleep(wait_time)
                         continue
                     elif resp.status == 403:

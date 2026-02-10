@@ -422,6 +422,11 @@ MOBILE_DASHBOARD_HTML = '''
             <div class="pnl-value" id="allTimePnlValue">$0.00</div>
             <div class="pnl-change" id="allTimePnlPct">0%</div>
         </div>
+        <div class="section-title">📉 История баланса</div>
+        <div class="stat-card" style="padding:8px;">
+            <canvas id="pnlChart" width="100%" height="120" style="width:100%;height:120px;border-radius:8px;"></canvas>
+        </div>
+        <button class="refresh-btn" style="top:auto;bottom:80px;left:16px;right:auto;" onclick="exportTrades()">📥 Экспорт</button>
     </div>
     
     <nav class="bottom-nav">
@@ -450,7 +455,8 @@ MOBILE_DASHBOARD_HTML = '''
             pnl: { today: 0, allTime: 0, trades: 0 },
             stats: { pumps: 0, signals: 0, winrate: 0, balance: 100 },
             signals: [],
-            news: []
+            news: [],
+            pnlHistory: []
         };
         
         // Switch tabs
@@ -518,7 +524,7 @@ MOBILE_DASHBOARD_HTML = '''
             document.getElementById('statPumps').textContent = data.stats.pumps;
             document.getElementById('statSignals').textContent = data.stats.signals;
             document.getElementById('statWinrate').textContent = data.stats.winrate + '%';
-            document.getElementById('statBalance').textContent = '$' + data.stats.balance.toLocaleString();
+            document.getElementById('statBalance').textContent = '$' + data.stats.balance.toFixed(0);
             
             // Signals
             const signalsList = document.getElementById('signalsList');
@@ -560,9 +566,45 @@ MOBILE_DASHBOARD_HTML = '''
             document.getElementById('allTimePnlValue').textContent = 
                 `$${data.pnl.allTime >= 0 ? '+' : ''}${data.pnl.allTime.toFixed(2)}`;
             allTimePnlCard.classList.toggle('negative', data.pnl.allTime < 0);
+            drawPnlChart();
         }
         
-        // Fetch data from API
+        function drawPnlChart() {
+            const h = data.pnlHistory || [];
+            if (h.length < 2) return;
+            const c = document.getElementById('pnlChart');
+            if (!c) return;
+            const ctx = c.getContext('2d');
+            const w = c.offsetWidth, H = 120;
+            c.width = w; c.height = H;
+            const vals = h.map(x => x.balance);
+            const min = Math.min(...vals), max = Math.max(...vals);
+            const range = max - min || 1;
+            ctx.fillStyle = '#1a1a25';
+            ctx.fillRect(0, 0, w, H);
+            ctx.strokeStyle = data.stats.balance >= (min + max)/2 ? '#00ff88' : '#ff4466';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            for (let i = 0; i < vals.length; i++) {
+                const x = (i / (vals.length - 1)) * (w - 4) + 2;
+                const y = H - 4 - ((vals[i] - min) / range) * (H - 8);
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+        }
+        
+        async function exportTrades() {
+            try {
+                const r = await fetch('/api/mobile/export?format=csv');
+                const blob = await r.blob();
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = 'trades_' + new Date().toISOString().slice(0,10) + '.csv';
+                a.click();
+            } catch (e) { alert('Ошибка экспорта'); }
+        }
+        
         async function fetchData() {
             try {
                 const response = await fetch('/api/mobile/data');
@@ -571,32 +613,31 @@ MOBILE_DASHBOARD_HTML = '''
                     updateUI();
                 }
             } catch (e) {
-                console.log('Using demo data');
-                // Demo data
                 console.error('API Error:', e);
-                // No demo data to avoid confusion
-                // data = { ... };
-                // updateUI();
                 document.getElementById('signalsList').innerHTML = '<div class="empty-state"><p>Ошибка загрузки данных</p></div>';
             }
         }
         
-        // Refresh data
+        function connectWebSocket() {
+            const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const ws = new WebSocket(wsProto + '//' + location.host + '/api/mobile/ws');
+            ws.onmessage = (e) => {
+                try {
+                    data = JSON.parse(e.data);
+                    updateUI();
+                } catch (err) {}
+            };
+            ws.onclose = () => setTimeout(connectWebSocket, 5000);
+            ws.onerror = () => ws.close();
+        }
+        
         function refreshData() {
-            document.getElementById('signalsList').innerHTML = `
-                <div class="loading">
-                    <div class="loading-spinner"></div>
-                    <p>Обновление...</p>
-                </div>
-            `;
+            document.getElementById('signalsList').innerHTML = '<div class="loading"><div class="loading-spinner"></div><p>Обновление...</p></div>';
             fetchData();
         }
         
-        // Initial load
         fetchData();
-        
-        // Auto-refresh every 30 seconds
-        setInterval(fetchData, 30000);
+        connectWebSocket();
     </script>
 </body>
 </html>
@@ -632,19 +673,40 @@ class MobileDashboard:
                 'profitFactor': 0
             },
             'signals': [],
-            'news': []
+            'news': [],
+            'pnlHistory': [],
+            'trades': []
         }
         
         self.app = None
         self.runner = None
+        self._ws_clients: set = set()
     
-    def update_pnl(self, today: float, all_time: float, trades: int):
+    async def _broadcast_ws(self):
+        """Push data to all WebSocket clients"""
+        if not self._ws_clients:
+            return
+        msg = json.dumps(self.data, default=str)
+        dead = set()
+        for ws in self._ws_clients:
+            try:
+                await ws.send_str(msg)
+            except Exception:
+                dead.add(ws)
+        for ws in dead:
+            self._ws_clients.discard(ws)
+    
+    def update_pnl(self, today: float, all_time: float, trades: int, balance: float = None):
         """Обновить P&L данные"""
         self.data['pnl'] = {
             'today': today,
             'allTime': all_time,
             'trades': trades
         }
+        if balance is not None:
+            hist = self.data.setdefault('pnlHistory', [])
+            hist.append({'ts': datetime.now().isoformat(), 'balance': balance, 'pnl': all_time})
+            self.data['pnlHistory'] = hist[-200:]
     
     def update_stats(
         self,
@@ -727,10 +789,11 @@ class MobileDashboard:
         
         self.app = web.Application()
         
-        # Routes
         self.app.router.add_get('/', self._handle_index)
         self.app.router.add_get('/mobile', self._handle_index)
         self.app.router.add_get('/api/mobile/data', self._handle_api_data)
+        self.app.router.add_get('/api/mobile/export', self._handle_export)
+        self.app.router.add_get('/api/mobile/ws', self._handle_ws)
         
         self.runner = web.AppRunner(self.app)
         await self.runner.setup()
@@ -754,9 +817,35 @@ class MobileDashboard:
         return web.Response(text=MOBILE_DASHBOARD_HTML, content_type='text/html')
     
     async def _handle_api_data(self, request):
-        """API для данных"""
         from aiohttp import web
         return web.json_response(self.data)
+    
+    async def _handle_export(self, request):
+        from aiohttp import web
+        fmt = request.query.get('format', 'csv')
+        trades = self.data.get('trades', [])
+        if fmt == 'csv':
+            lines = ['symbol,side,entry,qty,pnl,time']
+            for t in trades:
+                lines.append(f"{t.get('symbol','')},{t.get('side','')},{t.get('entry',0)},{t.get('qty',0)},{t.get('pnl',0)},{t.get('time','')}")
+            body = '\n'.join(lines)
+            return web.Response(text=body, content_type='text/csv', headers={
+                'Content-Disposition': 'attachment; filename="trades.csv"'
+            })
+        return web.json_response(trades)
+    
+    async def _handle_ws(self, request):
+        from aiohttp import web
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        self._ws_clients.add(ws)
+        try:
+            await ws.send_str(json.dumps(self.data, default=str))
+            async for _ in ws:
+                pass
+        finally:
+            self._ws_clients.discard(ws)
+        return ws
     
     async def stop(self):
         """Остановить сервер"""
