@@ -60,25 +60,25 @@ class AdaptiveExitPlan:
     entry_price: float
     entry_time: datetime
     
-    # Уровни
+    # Уровни (обязательные)
     stop_loss: ExitLevel
     take_profits: List[ExitLevel]
-    trailing_levels: List[ExitLevel] = field(default_factory=list)
     
-    # Адаптивные параметры
+    # Адаптивные параметры (обязательные)
     asset_class: AssetClass
     current_phase: ExitPhase
     atr_14: float
     volatility_1m: float        # 1-минутная волатильность
     volatility_5m: float        # 5-минутная волатильность
     
-    # Аналитика
+    # Аналитика (обязательные)
     volume_profile_poc: float   # Point of Control
     delta_structure: str        # 'bullish', 'bearish', 'neutral'
-    liquidation_clusters: List[float] = field(default_factory=list)
     
-    # Структурные уровни для динамического пересчета
-    structure_points: List[MarketStructurePoint] = field(default_factory=list)
+    # Опциональные поля с default
+    trailing_levels: List[ExitLevel] = field(default_factory=list)
+    liquidation_clusters: List[float] = field(default_factory=list)
+    structure_points: List['MarketStructurePoint'] = field(default_factory=list)
     
     # Динамические обновления
     last_update: datetime = field(default_factory=datetime.now)
