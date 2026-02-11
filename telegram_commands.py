@@ -247,9 +247,14 @@ class TelegramCommands:
             if 'reply_markup' in kwargs:
                 data['reply_markup'] = kwargs['reply_markup']
             
-            await session.post(url, json=data)
+            async with session.post(url, json=data) as resp:
+                if resp.status != 200:
+                    err_text = await resp.text()
+                    logger.error(f"❌ Telegram API Error ({resp.status}): {err_text}")
+                else:
+                    logger.debug(f"✅ Reply sent to {ctx.chat_id}")
         except Exception as e:
-            logger.error(f"Reply error: {e}")
+            logger.error(f"❌ Reply Exception: {e}")
     
     def _get_main_keyboard(self):
         """Get main menu keyboard"""
