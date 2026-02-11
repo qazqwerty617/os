@@ -84,7 +84,7 @@ class VolumeProfiler:
         self.num_clusters = num_clusters
         self.trades: Dict[str, List[Trade]] = defaultdict(list)
         self.profiles: Dict[str, VolumeProfile] = {}
-        self.max_trades = 50000
+        self.max_trades = 2000  # Reduced from 50k to prevent OOM
     
     def record_trade(
         self, symbol: str, price: float, quantity: float,
@@ -179,6 +179,25 @@ class VolumeProfiler:
         
         self.profiles[symbol] = profile
         return profile
+    
+    def cleanup(self, max_age_ms: int = 1800000):
+        """Remove stale trade data and profiles older than max_age (default 30min)"""
+        now = int(time.time() * 1000)
+        cutoff = now - max_age_ms
+        
+        stale_symbols = []
+        for sym, trades_list in self.trades.items():
+            # Remove old trades
+            self.trades[sym] = [t for t in trades_list if t.timestamp > cutoff]
+            if not self.trades[sym]:
+                stale_symbols.append(sym)
+        
+        for sym in stale_symbols:
+            del self.trades[sym]
+            self.profiles.pop(sym, None)
+        
+        if stale_symbols:
+            logger.debug(f"🧹 VolumeProfiler cleanup: removed {len(stale_symbols)} stale symbols")
     
     def _calculate_value_area(self, profile: VolumeProfile):
         """Calculate Value Area High/Low (70% of volume)"""

@@ -103,7 +103,7 @@ class WhaleDetector:
     """
     
     def __init__(self):
-        self.order_history: Dict[str, deque] = defaultdict(lambda: deque(maxlen=1000))
+        self.order_history: Dict[str, deque] = defaultdict(lambda: deque(maxlen=200))  # Reduced from 1000
         self.activity: Dict[str, WhaleActivity] = {}
         self.accumulation_zones: Dict[str, List[AccumulationZone]] = defaultdict(list)
         self.alerts: deque = deque(maxlen=100)
@@ -302,3 +302,17 @@ class WhaleDetector:
         
         all_orders.sort(key=lambda x: x.timestamp, reverse=True)
         return all_orders[:limit]
+
+    def cleanup(self, max_age_ms: int = 1800000):
+        """Remove stale whale data for symbols inactive for > max_age (default 30min)"""
+        now = int(time.time() * 1000)
+        cutoff = now - max_age_ms
+        
+        stale = [sym for sym, act in self.activity.items() if act.timestamp < cutoff]
+        for sym in stale:
+            self.activity.pop(sym, None)
+            self.order_history.pop(sym, None)
+            self.accumulation_zones.pop(sym, None)
+        
+        if stale:
+            logger.debug(f"🧹 WhaleDetector cleanup: removed {len(stale)} stale symbols")

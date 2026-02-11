@@ -313,7 +313,8 @@ class SystemOrchestrator:
             self._manipulation_detection_loop,
             self._heatmap_loop,
             self._advanced_pattern_loop,
-            self._health_check_loop
+            self._health_check_loop,
+            self._memory_maintenance_loop  # 🧹 NEW: Prevents OOM crash
         ]
         
         for loop in loops:
@@ -926,6 +927,58 @@ class SystemOrchestrator:
                 
             except Exception as e:
                 logger.error(f"Health loop error: {e}")
+                await asyncio.sleep(60)
+
+    async def _memory_maintenance_loop(self):
+        """🧹 Central memory cleanup loop - prevents OOM crashes every 15min"""
+        import gc
+        import psutil
+        
+        while self.is_running:
+            try:
+                await asyncio.sleep(900)  # 15 minutes
+                
+                mem_before = psutil.virtual_memory().percent
+                
+                # 1. VolumeProfiler - biggest offender (stores trades per symbol)
+                if hasattr(self.volume_profiler, 'cleanup'):
+                    self.volume_profiler.cleanup()
+                
+                # 2. WhaleDetector - order_history + activity per symbol
+                if hasattr(self.whale_detector, 'cleanup'):
+                    self.whale_detector.cleanup()
+                
+                # 3. MarketAnalyzer - order_books + oi_history per symbol
+                if hasattr(self.market_analyzer, 'cleanup'):
+                    self.market_analyzer.cleanup()
+                
+                # 4. SignalEngine - trim signals list
+                if hasattr(self.signal_engine, 'signals') and len(self.signal_engine.signals) > 100:
+                    self.signal_engine.signals = self.signal_engine.signals[-100:]
+                
+                # 5. NewsBot - trim news list
+                if hasattr(self.news_bot, 'news') and len(self.news_bot.news) > 100:
+                    self.news_bot.news = self.news_bot.news[-100:]
+                
+                # 6. PerformanceTracker - expire old active signals (4h timeout)
+                if hasattr(self.perf_tracker, 'active_signals'):
+                    now = int(time.time() * 1000)
+                    four_hours = 4 * 3600 * 1000
+                    expired = [k for k, v in self.perf_tracker.active_signals.items() 
+                               if now - v.timestamp > four_hours]
+                    for k in expired:
+                        del self.perf_tracker.active_signals[k]
+                    if expired:
+                        logger.debug(f"🧹 Expired {len(expired)} stale signals from PerformanceTracker")
+                
+                # 7. Force garbage collection
+                gc.collect()
+                
+                mem_after = psutil.virtual_memory().percent
+                logger.info(f"🧹 Memory Maintenance: RAM {mem_before:.1f}% → {mem_after:.1f}%")
+                
+            except Exception as e:
+                logger.error(f"Memory maintenance error: {e}")
                 await asyncio.sleep(60)
 
 # Global Entry Point helper

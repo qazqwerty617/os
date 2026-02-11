@@ -165,8 +165,8 @@ class MarketAnalyzer:
         self.order_books: Dict[str, OrderBook] = {}
         self.funding_rates: Dict[str, FundingInfo] = {}
         self.open_interest: Dict[str, OpenInterestData] = {}
-        self.liquidations: Dict[str, deque] = defaultdict(lambda: deque(maxlen=100))
-        self.oi_history: Dict[str, deque] = defaultdict(lambda: deque(maxlen=200))
+        self.liquidations: Dict[str, deque] = defaultdict(lambda: deque(maxlen=50))  # Reduced from 100
+        self.oi_history: Dict[str, deque] = defaultdict(lambda: deque(maxlen=60))  # Reduced from 200
     
     async def start(self):
         import ssl
@@ -266,3 +266,25 @@ class MarketAnalyzer:
         )
         analysis.calculate_short_pressure()
         return analysis
+
+    def cleanup(self, max_age_ms: int = 1800000):
+        """Remove stale market data for symbols older than max_age (default 30min)"""
+        now = int(time.time() * 1000)
+        cutoff = now - max_age_ms
+        
+        # Clean order books
+        stale_ob = [s for s, ob in self.order_books.items() if ob.timestamp < cutoff]
+        for s in stale_ob:
+            del self.order_books[s]
+        
+        # Clean OI history
+        stale_oi = [s for s in self.oi_history if not self.oi_history[s] or self.oi_history[s][-1][0] < cutoff]
+        for s in stale_oi:
+            del self.oi_history[s]
+            self.open_interest.pop(s, None)
+            self.liquidations.pop(s, None)
+        
+        total_removed = len(stale_ob) + len(stale_oi)
+        if total_removed:
+            logger.debug(f"🧹 MarketAnalyzer cleanup: removed {total_removed} stale entries")
+
