@@ -389,7 +389,6 @@ class SystemOrchestrator:
         # 💎 Fetch Market Cap
         base_asset = symbol.split('_')[0] if '_' in symbol else symbol.replace('USDT', '')
         mcap_str = "Unavailable"
-        token_info = await self.tokenomics.get_tokenomics(base_asset)
         if token_info and token_info.market_cap > 0:
             if token_info.market_cap >= 1_000_000_000:
                 mcap_str = f"${token_info.market_cap / 1_000_000_000:.1f}B"
@@ -400,6 +399,22 @@ class SystemOrchestrator:
         
         # 🆕 Check Multi-Exchange Listings & Get Prices
         is_new_listing, new_listing_details = self.global_listings.is_new_listing(symbol, max_age_hours=24)
+        
+        # 💎 Fetch Market Cap
+        base_asset = symbol.split('_')[0] if '_' in symbol else symbol.replace('USDT', '')
+        mcap_str = "Unavailable"
+        token_info = await self.tokenomics.get_tokenomics(base_asset)
+        
+        # 🛡️ LISTING SAFEGUARD: If token has high MC, it's almost certainly NOT a new listing
+        # unless it's on a Major exchange (Binance/OKX)
+        if is_new_listing and token_info and token_info.market_cap > 5_000_000:
+            major_exchanges = {'Binance', 'Binance Futures', 'OKX'}
+            is_on_major = any(ex in major_exchanges for ex, age in new_listing_details)
+            if not is_on_major:
+                logger.info(f"🛡️ Listing Safeguard: {symbol} MC is ${token_info.market_cap:,.0f}. Ignoring false listing alert.")
+                is_new_listing = False
+                new_listing_details = []
+
         other_prices = await self.global_listings.get_prices(symbol)
         
         # 📊 Format price comparison
