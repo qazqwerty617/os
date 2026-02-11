@@ -315,7 +315,7 @@ Welcome! Бот отслеживает аномальные движения MEX
 
 <i>Trade smart. 💰</i>
 """
-        await self._reply(ctx, msg, reply_markup=self._get_main_keyboard())
+        await self._reply(ctx, msg, reply_markup=await self._get_main_keyboard())
         return None
     
     async def _cmd_stats(self, ctx: CommandContext) -> str:
