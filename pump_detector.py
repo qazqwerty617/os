@@ -199,6 +199,10 @@ class PumpDetector:
         # Signal history (limited to prevent memory leak)
         self.signal_history: deque = deque(maxlen=100)
         
+        # Hydration tracking
+        self.last_hydrated: Dict[str, float] = {}
+        self.hydration_cooldown_sec = 60  # 1 minute cooldown for hydration
+        
         # Cooldown to avoid duplicate signals - СНИЖЕН для мемкоинов
         self.cooldown: Dict[str, int] = {}  # symbol -> last signal timestamp
         self.cooldown_minutes = 5  # Было 15, стало 5 минут для мемкоинов
@@ -351,7 +355,14 @@ class PumpDetector:
         if price_change < HYDRATION_THRESHOLD:
             return
             
+        # 1. Check Hydration Cooldown (Stop spamming logs and API)
+        now = time.time()
+        last_h = self.last_hydrated.get(symbol, 0)
+        if now - last_h < self.hydration_cooldown_sec:
+            return
+
         logger.info(f"💧 HYDRATION: {symbol} triggered at +{price_change:.2f}%. Fetching history...")
+        self.last_hydrated[symbol] = now
         
         # Fetch detailed history only when needed
         try:
