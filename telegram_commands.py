@@ -138,10 +138,11 @@ class TelegramCommands:
         try:
             session = await self._get_session()
             url = f"https://api.telegram.org/bot{self.bot_token}/getUpdates"
+            # logger.debug(f"Polling Telegram updates (offset: {self.last_update_id + 1})...")
             params = {
                 'offset': self.last_update_id + 1,
                 'timeout': 30,
-                'allowed_updates': ['message']
+                'allowed_updates': ['message', 'callback_query']
             }
             
             async with session.get(url, params=params, timeout=35) as r:
@@ -159,13 +160,52 @@ class TelegramCommands:
     
     async def _process_update(self, update: dict):
         """Process update"""
-        message = update.get('message', {})
+        message = update.get('message')
+        callback = update.get('callback_query')
+        
+        if callback:
+            # Handle button clicks
+            data = callback.get('data', '')
+            logger.info(f"📩 Telegram Callback: {data} from {callback.get('from', {}).get('username')}")
+            chat = callback.get('message', {}).get('chat', {})
+            user = callback.get('from', {})
+            
+            # Answer callback to remove loading state
+            try:
+                session = await self._get_session()
+                url = f"https://api.telegram.org/bot{self.bot_token}/answerCallbackQuery"
+                await session.post(url, json={"callback_query_id": callback['id']})
+            except: pass
+
+            ctx = CommandContext(
+                chat_id=chat.get('id'),
+                user_id=user.get('id'),
+                username=user.get('username', 'unknown'),
+                command=data,
+                args=[],
+                timestamp=int(time.time() * 1000)
+            )
+            
+            handler = self._handlers.get(data)
+            if handler:
+                response = await handler(ctx)
+                if response: await self._reply(ctx, response)
+            return
+
+        if not message:
+            return
+            
+        chat = message.get('chat', {})
+        user = message.get('from', {})
         text = message.get('text', '')
+        
+        logger.info(f"📩 Telegram Message: {text} from {user.get('username') or user.get('id')}")
         
         if not text.startswith('/'):
             return
         
         parts = text.split()
+        if not parts: return
         cmd = parts[0][1:].lower().split('@')[0]
         args = parts[1:]
         
