@@ -315,7 +315,7 @@ Welcome! Бот отслеживает аномальные движения MEX
 
 <i>Trade smart. 💰</i>
 """
-        await self._reply(ctx, msg, reply_markup=await self._get_main_keyboard())
+        await self._reply(ctx, msg, reply_markup=self._get_main_keyboard())
         return None
     
     async def _cmd_stats(self, ctx: CommandContext) -> str:
@@ -376,23 +376,36 @@ Feature in development...
         self.is_paused = False
         return "▶️ Notifications resumed!"
     
+    def _get_health_bar(self, percentage: float) -> str:
+        """Generate a visual progress bar for percentages"""
+        filled = int(percentage / 10)
+        empty = 10 - filled
+        # Use dynamic colors for high usage
+        color = "🔴" if percentage > 90 else "🟡" if percentage > 70 else "🟢"
+        bar = "■" * filled + "□" * empty
+        return f"{color} {bar} {percentage:.1f}%"
+
     async def _cmd_health(self, ctx: CommandContext) -> str:
         if self.health_provider:
             try:
                 h = self.health_provider()
+                cpu_bar = self._get_health_bar(h.get('cpu', 0))
+                mem_bar = self._get_health_bar(h.get('memory', 0))
+                
                 return f"""
 🏥 <b>СОСТОЯНИЕ СИСТЕМЫ</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-💻 <b>CPU:</b> {h.get('cpu', 0):.1f}%
-🧠 <b>RAM:</b> {h.get('memory', 0):.1f}%
+💻 <b>CPU:</b> {cpu_bar}
+🧠 <b>RAM:</b> {mem_bar}
 📡 <b>MEXC API:</b> {'🟢 OK' if h.get('api_ok') else '🔴 Error'}
 🔌 <b>Websocket:</b> {'🟢 OK' if h.get('ws_ok') else '🔴 Error'}
 
 ⏱️ <b>Uptime:</b> {h.get('uptime', 'N/A')}
 ⚙️ <b>Статус:</b> Operational
 """
-            except:
+            except Exception as e:
+                logger.error(f"Error in health provider: {e}")
                 pass
         
         return """

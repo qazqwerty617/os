@@ -498,3 +498,48 @@ class HealthMonitor:
             'active_alerts': len(self.active_alerts),
             'metrics_collected': len(self.metrics_history)
         }
+
+    def get_health_status(self) -> Dict:
+        """
+        🚀 Получить быстрый статус для Telegram
+        Возвращает реальные проценты загрузки CPU и RAM
+        """
+        try:
+            # CPU (one-shot measurement)
+            cpu = psutil.cpu_percent(interval=0.1)
+            
+            # Memory
+            mem = psutil.virtual_memory().percent
+            
+            # Uptime
+            uptime_sec = (int(time.time() * 1000) - self.start_time) // 1000
+            uptime_str = str(timedelta(seconds=uptime_sec))
+            
+            # Check components
+            api_ok = True
+            ws_ok = True
+            
+            for comp in self.components.values():
+                if 'api' in comp.name.lower() and comp.status != HealthStatus.HEALTHY:
+                    api_ok = False
+                if 'ws' in comp.name.lower() and comp.status != HealthStatus.HEALTHY:
+                    ws_ok = False
+            
+            return {
+                'cpu': cpu,
+                'memory': mem,
+                'api_ok': api_ok,
+                'ws_ok': ws_ok,
+                'uptime': uptime_str,
+                'status': 'Operational'
+            }
+        except Exception as e:
+            logger.error(f"Error in get_health_status: {e}")
+            return {
+                'cpu': 0,
+                'memory': 0,
+                'api_ok': False,
+                'ws_ok': False,
+                'uptime': 'N/A',
+                'status': 'Error'
+            }
