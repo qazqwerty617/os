@@ -64,6 +64,7 @@ class TelegramCommands:
         
         self._session: Optional[aiohttp.ClientSession] = None
         self._running = False
+        self._cached_ip = None
         
         self._register_defaults()
     
@@ -189,7 +190,9 @@ class TelegramCommands:
             handler = self._handlers.get(data)
             if handler:
                 response = await handler(ctx)
-                if response: await self._reply(ctx, response)
+                if response:
+                    kb = await self._get_main_keyboard()
+                    await self._reply(ctx, response, reply_markup=kb)
             return
 
         if not message:
@@ -230,7 +233,8 @@ class TelegramCommands:
             try:
                 response = await handler(ctx)
                 if response:
-                    await self._reply(ctx, response)
+                    kb = await self._get_main_keyboard() if cmd == 'start' else None
+                    await self._reply(ctx, response, reply_markup=kb)
             except Exception as e:
                 logger.error(f"Command error: {e}")
                 await self._reply(ctx, f"❌ Error: {str(e)[:100]}")
@@ -256,10 +260,23 @@ class TelegramCommands:
         except Exception as e:
             logger.error(f"❌ Reply Exception: {e}")
     
-    def _get_main_keyboard(self):
+    async def _get_public_ip(self) -> str:
+        """Fetch public IP of the VPS"""
+        if self._cached_ip: return self._cached_ip
+        try:
+            session = await self._get_session()
+            async with session.get("https://api.ipify.org", timeout=5) as r:
+                if r.status == 200:
+                    self._cached_ip = await r.text()
+                    return self._cached_ip
+        except: pass
+        return "IP_ADDRESS"
+
+    async def _get_main_keyboard(self):
         """Get main menu keyboard"""
         from config import config
-        dash_url = config.dashboard.public_url or f"http://{config.dashboard.host if config.dashboard.host != '0.0.0.0' else 'IP_ADDRESS'}:8081/mobile"
+        ip = await self._get_public_ip()
+        dash_url = config.dashboard.public_url or f"http://{ip}:8081/mobile"
         return {
             "inline_keyboard": [
                 [{"text": "📱 OPEN DASHBOARD / ТЕРМИНАЛ", "url": dash_url}],
