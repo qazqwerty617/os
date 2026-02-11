@@ -453,9 +453,145 @@ MOBILE_DASHBOARD_HTML = '''
             transition: transform 0.3s;
         }
         .fab:active { transform: rotate(180deg) scale(0.9); }
+
+        /* === SIGNAL DETAIL MODAL === */
+        .modal-backdrop {
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,0.6);
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+            z-index: 200;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.25s;
+        }
+        .modal-backdrop.show {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .modal-sheet {
+            position: fixed; bottom: 0; left: 0; right: 0;
+            z-index: 201;
+            background: var(--bg-1);
+            border-radius: 20px 20px 0 0;
+            padding: 20px;
+            padding-bottom: calc(20px + env(safe-area-inset-bottom, 0));
+            transform: translateY(100%);
+            transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+            max-height: 70vh;
+            overflow-y: auto;
+        }
+        .modal-backdrop.show .modal-sheet {
+            transform: translateY(0);
+        }
+        .modal-handle {
+            width: 36px; height: 4px;
+            background: rgba(255,255,255,0.15);
+            border-radius: 2px;
+            margin: 0 auto 16px;
+        }
+        .modal-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 16px;
+        }
+        .modal-sym {
+            font-size: 1.4rem; font-weight: 800;
+        }
+        .modal-side {
+            padding: 4px 12px;
+            border-radius: 8px;
+            font-size: 0.72rem; font-weight: 700;
+        }
+        .modal-side.long { background: var(--green-bg); color: var(--green); }
+        .modal-side.short { background: var(--red-bg); color: var(--red); }
+        .modal-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+        .modal-item {
+            background: var(--gradient-card);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            padding: 12px;
+            text-align: center;
+        }
+        .modal-item-val {
+            font-size: 1.2rem; font-weight: 700;
+            font-variant-numeric: tabular-nums;
+        }
+        .modal-item-lbl {
+            font-size: 0.6rem; font-weight: 600;
+            color: var(--text-3);
+            text-transform: uppercase;
+            margin-top: 2px;
+        }
+        .modal-mexc-btn {
+            display: block;
+            width: 100%;
+            padding: 14px;
+            border: none;
+            border-radius: 12px;
+            background: var(--gradient-brand);
+            color: white;
+            font-size: 0.85rem;
+            font-weight: 700;
+            cursor: pointer;
+            text-align: center;
+            text-decoration: none;
+        }
+
+        /* Clickable news */
+        .news-item { cursor: pointer; }
+        .news-item:hover .news-title { color: var(--blue); }
+        .news-link-icon {
+            font-size: 0.55rem; color: var(--text-3);
+            margin-left: auto;
+        }
     </style>
 </head>
 <body>
+    <!-- SIGNAL DETAIL MODAL -->
+    <div class="modal-backdrop" id="sigModal" onclick="closeModal(event)">
+        <div class="modal-sheet" onclick="event.stopPropagation()">
+            <div class="modal-handle"></div>
+            <div class="modal-header">
+                <span class="modal-sym" id="mdSym">--</span>
+                <span class="modal-side" id="mdSide">--</span>
+            </div>
+            <div class="modal-grid">
+                <div class="modal-item">
+                    <div class="modal-item-val" id="mdChange" style="color:var(--green)">0%</div>
+                    <div class="modal-item-lbl">Изменение</div>
+                </div>
+                <div class="modal-item">
+                    <div class="modal-item-val" id="mdScore" style="color:var(--blue)">0</div>
+                    <div class="modal-item-lbl">Score</div>
+                </div>
+                <div class="modal-item">
+                    <div class="modal-item-val" id="mdRsi" style="color:var(--orange)">0</div>
+                    <div class="modal-item-lbl">RSI</div>
+                </div>
+                <div class="modal-item">
+                    <div class="modal-item-val" id="mdVol" style="color:var(--purple)">0x</div>
+                    <div class="modal-item-lbl">Объём</div>
+                </div>
+                <div class="modal-item">
+                    <div class="modal-item-val" id="mdPnl">$0</div>
+                    <div class="modal-item-lbl">P&L</div>
+                </div>
+                <div class="modal-item">
+                    <div class="modal-item-val" id="mdTime" style="color:var(--text-2)">--</div>
+                    <div class="modal-item-lbl">Время</div>
+                </div>
+            </div>
+            <a class="modal-mexc-btn" id="mdLink" href="#" target="_blank">
+                📈 Открыть на MEXC
+            </a>
+        </div>
+    </div>
+
     <!-- HEADER -->
     <header class="header">
         <div class="logo">
@@ -599,8 +735,8 @@ MOBILE_DASHBOARD_HTML = '''
         btn.classList.add('on');
     }
 
-    /* === RENDER SIGNALS === */
-    function renderSignalCard(s, fresh) {
+    /* === RENDER SIGNALS (clickable → modal) === */
+    function renderSignalCard(s, fresh, idx) {
         const isShort = s.side === 'SHORT';
         const pct = s.change || 0;
         const score = s.score || 0;
@@ -608,7 +744,7 @@ MOBILE_DASHBOARD_HTML = '''
         const sym = (s.symbol || '').replace('_USDT','').replace('USDT','');
         const cls = `sig-card ${isShort ? 'short' : 'long'}${fresh ? ' fresh' : ''}`;
 
-        return `<div class="${cls}">
+        return `<div class="${cls}" onclick="showSignalDetail(${idx})" style="cursor:pointer">
             <div class="sig-left">
                 <div class="sig-sym">${sym}</div>
                 <div class="sig-meta">
@@ -624,13 +760,57 @@ MOBILE_DASHBOARD_HTML = '''
         </div>`;
     }
 
-    /* === RENDER NEWS === */
+    /* === SIGNAL MODAL === */
+    function showSignalDetail(idx) {
+        const s = data.signals[idx];
+        if (!s) return;
+        const sym = (s.symbol || '').replace('_USDT','').replace('USDT','');
+        const isShort = s.side === 'SHORT';
+        const pct = s.change || 0;
+
+        document.getElementById('mdSym').textContent = sym;
+        const sideEl = document.getElementById('mdSide');
+        sideEl.textContent = s.side || 'LONG';
+        sideEl.className = 'modal-side ' + (isShort ? 'short' : 'long');
+
+        const chEl = document.getElementById('mdChange');
+        chEl.textContent = `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
+        chEl.style.color = pct >= 0 ? 'var(--green)' : 'var(--red)';
+
+        document.getElementById('mdScore').textContent = (s.score || 0) + '/100';
+        document.getElementById('mdRsi').textContent = (s.rsi || 0).toFixed(1);
+        document.getElementById('mdVol').textContent = (s.volume || 0).toFixed(1) + 'x';
+
+        const pnlEl = document.getElementById('mdPnl');
+        const pnl = s.pnl || 0;
+        pnlEl.textContent = `$${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}`;
+        pnlEl.style.color = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+
+        const t = s.time ? new Date(s.time) : new Date();
+        document.getElementById('mdTime').textContent = t.toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'});
+
+        // MEXC link
+        const pair = (s.symbol || '').replace('_USDT','USDT');
+        document.getElementById('mdLink').href = `https://www.mexc.com/exchange/${pair}`;
+
+        document.getElementById('sigModal').classList.add('show');
+    }
+
+    function closeModal(e) {
+        document.getElementById('sigModal').classList.remove('show');
+    }
+
+    /* === RENDER NEWS (clickable → open URL) === */
     function renderNewsCard(n) {
         const signalClass = n.signal.includes('LONG') ? 'long' : n.signal.includes('SHORT') ? 'short' : 'neutral';
-        return `<div class="news-item">
+        const hasUrl = n.url && n.url.length > 0;
+        const onClick = hasUrl ? `onclick="window.open('${n.url}','_blank')"` : '';
+        const arrow = hasUrl ? '<span class="news-link-icon">🔗</span>' : '';
+        return `<div class="news-item" ${onClick}>
             <div class="news-top">
                 <span class="news-badge ${signalClass}">${n.signal}</span>
                 <span style="font-size:0.55rem;color:var(--text-3)">${n.source} • ${n.time}</span>
+                ${arrow}
             </div>
             <div class="news-title">${n.title}</div>
         </div>`;
@@ -658,8 +838,8 @@ MOBILE_DASHBOARD_HTML = '''
         badge.textContent = data.signals.length;
 
         if (data.signals.length > 0) {
-            sl.innerHTML = data.signals.slice(0, 6).map((s,i) => renderSignalCard(s, i===0)).join('');
-            al.innerHTML = data.signals.map(s => renderSignalCard(s, false)).join('');
+            sl.innerHTML = data.signals.slice(0, 6).map((s,i) => renderSignalCard(s, i===0, i)).join('');
+            al.innerHTML = data.signals.map((s,i) => renderSignalCard(s, false, i)).join('');
         } else {
             sl.innerHTML = '<div class="empty"><div class="empty-icon">📭</div><div class="empty-text">Нет активных сигналов</div></div>';
             al.innerHTML = '<div class="empty"><div class="empty-icon">📭</div><div class="empty-text">Нет сигналов</div></div>';
@@ -902,18 +1082,25 @@ class MobileDashboard:
         
         # Ограничить до 50 сигналов
         self.data['signals'] = self.data['signals'][:50]
+        
+        # Instant broadcast to all WS clients
+        asyncio.ensure_future(self._broadcast_ws())
     
-    def add_news(self, signal: str, title: str, source: str, time_ago: str):
+    def add_news(self, signal: str, title: str, source: str, time_ago: str, url: str = ''):
         """Добавить новость"""
         news = {
             'signal': signal,
             'title': title,
             'source': source,
-            'time': time_ago
+            'time': time_ago,
+            'url': url
         }
         
         self.data['news'].insert(0, news)
         self.data['news'] = self.data['news'][:20]
+        
+        # Instant broadcast
+        asyncio.ensure_future(self._broadcast_ws())
     
     async def start(self):
         """Запустить веб-сервер"""
@@ -982,6 +1169,20 @@ class MobileDashboard:
         finally:
             self._ws_clients.discard(ws)
         return ws
+    
+    async def _broadcast_ws(self):
+        """Push data to all connected WS clients"""
+        if not self._ws_clients:
+            return
+        payload = json.dumps(self.data, default=str)
+        closed = []
+        for ws in self._ws_clients:
+            try:
+                await ws.send_str(payload)
+            except Exception:
+                closed.append(ws)
+        for ws in closed:
+            self._ws_clients.discard(ws)
     
     async def stop(self):
         """Остановить сервер"""
