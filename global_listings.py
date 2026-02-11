@@ -112,13 +112,13 @@ class GlobalListingWatcher:
         
         now = int(time.time() * 1000)
     
-        # On first run, use old timestamp (7 days ago) for existing symbols
+        # On first run, use old timestamp (30 days ago) for existing symbols
         # This prevents false "NEW LISTING" alerts for already-listed coins
-        discovery_time = now if not self._is_first_run else now - (7 * 24 * 3600 * 1000)
+        discovery_time = now if not self._is_first_run else now - (30 * 24 * 3600 * 1000)
         
         for idx, symbols in enumerate(results):
-            if isinstance(symbols, Exception):
-                logger.error(f"Error fetching from {self.EXCHANGES[idx]}: {symbols}")
+            if isinstance(symbols, Exception) or not symbols:
+                logger.debug(f"Skipping {self.EXCHANGES[idx]} due to empty or error result")
                 continue
                 
             exchange_name = self.EXCHANGES[idx]
@@ -136,21 +136,31 @@ class GlobalListingWatcher:
                         for cb in self._callbacks:
                             asyncio.create_task(cb(sym_upper, exchange_name))
         
-        # Mark first run as complete
-        if self._is_first_run:
+        # Mark first run as complete IF we successfully fetched from at least half the exchanges
+        success_count = sum(1 for r in results if not isinstance(r, Exception) and r)
+        if self._is_first_run and success_count >= (len(self.EXCHANGES) / 2):
             self._is_first_run = False
-            logger.info(f"📊 Initial scan complete: {len(self.listings)} symbols indexed")
+            logger.info(f"📊 Initial scan complete: {len(self.listings)} symbols indexed ({success_count}/{len(self.EXCHANGES)} sources)")
+
+    async def _fetch_url_retry(self, url: str, timeout: int = 15, retries: int = 2) -> Optional[dict]:
+        """Fetch JSON with retries"""
+        for i in range(retries + 1):
+            try:
+                async with self._session.get(url, timeout=timeout) as resp:
+                    if resp.status == 200:
+                        return await resp.json(content_type=None)
+                    elif resp.status == 429:
+                        await asyncio.sleep(2 * (i + 1))
+            except Exception:
+                if i < retries:
+                    await asyncio.sleep(1)
+        return None
 
     async def _fetch_binance_futures(self) -> Set[str]:
         """Fetch symbols from Binance Futures"""
-        try:
-            url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
-            async with self._session.get(url, timeout=10) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return {s['baseAsset'] for s in data.get('symbols', []) if s['quoteAsset'] == 'USDT'}
-        except Exception:
-            pass
+        data = await self._fetch_url_retry("https://fapi.binance.com/fapi/v1/exchangeInfo")
+        if data:
+            return {s['baseAsset'] for s in data.get('symbols', []) if s['quoteAsset'] == 'USDT'}
         return set()
 
     def on_new_listing(self, callback):
@@ -202,10 +212,23 @@ class GlobalListingWatcher:
             
         now = int(time.time() * 1000)
         new_listings = []
+        is_already_old = False
         
+        # FIRST: Check if this token is already "Old" on any exchange (listed > 24h ago)
+        for ex, first_seen in found_on.items():
+            age_hours = (now - first_seen) / (3600 * 1000)
+            if age_hours > 24:
+                is_already_old = True
+                break
+        
+        # SECOND: Find new listings
         for ex, first_seen in found_on.items():
             age_hours = (now - first_seen) / (3600 * 1000)
             if age_hours < max_age_hours:
+                # STRATEGY: If token is already old on OTHER exchanges,
+                # only count as "New Listing" if it's on a Major exchange (Binance/OKX)
+                if is_already_old and ex not in ['Binance', 'Binance Futures', 'OKX']:
+                    continue
                 new_listings.append((ex, age_hours))
         
         # Sort by age (newest first)
@@ -299,37 +322,37 @@ class GlobalListingWatcher:
     # --- Exchange Fetchers ---
 
     async def _fetch_binance(self) -> Set[str]:
-        url = "https://api.binance.com/api/v3/exchangeInfo"
-        async with self._session.get(url, timeout=10) as resp:
-            data = await resp.json()
+        data = await self._fetch_url_retry("https://api.binance.com/api/v3/exchangeInfo")
+        if data:
             return {s['baseAsset'] for s in data.get('symbols', [])}
+        return set()
 
     async def _fetch_okx(self) -> Set[str]:
-        url = "https://www.okx.com/api/v5/public/instruments?instType=SPOT"
-        async with self._session.get(url, timeout=10) as resp:
-            data = await resp.json()
+        data = await self._fetch_url_retry("https://www.okx.com/api/v5/public/instruments?instType=SPOT")
+        if data:
             return {s['baseCcy'] for s in data.get('data', [])}
+        return set()
 
     async def _fetch_bybit(self) -> Set[str]:
-        url = "https://api.bybit.com/v5/market/instruments-info?category=spot"
-        async with self._session.get(url, timeout=10) as resp:
-            data = await resp.json()
+        data = await self._fetch_url_retry("https://api.bybit.com/v5/market/instruments-info?category=spot")
+        if data:
             return {s['baseCoin'] for s in data.get('result', {}).get('list', [])}
+        return set()
 
     async def _fetch_gate(self) -> Set[str]:
-        url = "https://api.gateio.ws/api/v4/spot/currency_pairs"
-        async with self._session.get(url, timeout=10) as resp:
-            data = await resp.json()
+        data = await self._fetch_url_retry("https://api.gateio.ws/api/v4/spot/currency_pairs")
+        if data:
             return {s['base'] for s in data if isinstance(s, dict)}
+        return set()
 
     async def _fetch_bingx(self) -> Set[str]:
-        url = "https://open-api.bingx.com/openApi/spot/v1/common/symbols"
-        async with self._session.get(url, timeout=15) as resp:
-            data = await resp.json(content_type=None)
+        data = await self._fetch_url_retry("https://open-api.bingx.com/openApi/spot/v1/common/symbols")
+        if data:
             return {s['symbol'].split('-')[0] for s in data.get('data', {}).get('symbols', [])}
+        return set()
 
     async def _fetch_kucoin(self) -> Set[str]:
-        url = "https://api.kucoin.com/api/v1/symbols"
-        async with self._session.get(url, timeout=10) as resp:
-            data = await resp.json()
+        data = await self._fetch_url_retry("https://api.kucoin.com/api/v1/symbols")
+        if data:
             return {s['baseCurrency'] for s in data.get('data', [])}
+        return set()
