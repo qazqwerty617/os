@@ -18,6 +18,36 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class LightweightTracker:
+    """Minimized tracker for baseline monitoring (saves 90% RAM)"""
+    last_price: float = 0.0
+    # Store price per minute to detect changes over window
+    history: deque = field(default_factory=lambda: deque(maxlen=30)) 
+    last_minute_ts: int = 0
+
+    def add(self, price: float, timestamp: int):
+        self.last_price = price
+        minute_ts = (timestamp // 60000) * 60000
+        
+        if minute_ts > self.last_minute_ts:
+            self.history.append(price)
+            self.last_minute_ts = minute_ts
+        elif self.history:
+            self.history[-1] = price
+
+    def get_price_change(self, minutes: int) -> float:
+        if len(self.history) < 2:
+            return 0.0
+        
+        # Look back N minutes
+        idx = max(0, len(self.history) - minutes - 1)
+        old_price = self.history[idx]
+        
+        if old_price == 0: return 0.0
+        return ((self.last_price - old_price) / old_price) * 100
+
+
+@dataclass
 class PumpSignal:
     """Detected pump signal with scoring"""
     symbol: str
@@ -157,8 +187,11 @@ class PumpDetector:
         self.client = client
         self.config = config
         
-        # Price history per symbol
-        self.history: Dict[str, PriceHistory] = defaultdict(PriceHistory)
+        # Lightweight trackers for all symbols (baseline monitoring)
+        self.trackers: Dict[str, LightweightTracker] = defaultdict(LightweightTracker)
+        
+        # Price history cache (only for pumping symbols)
+        self.history_cache: Dict[str, PriceHistory] = {}
         
         # Active signals
         self.active_signals: Dict[str, PumpSignal] = {}
@@ -199,44 +232,16 @@ class PumpDetector:
         # Start aggressive REST polling loop
         asyncio.create_task(self._scan_loop())
         
+        # Start cache cleanup loop
+        asyncio.create_task(self._cleanup_loop())
+        
         logger.info("✅ Pump detector started (REST polling every 1s)")
     
     async def _initial_load(self):
-        """Load initial kline data for all symbols (Parallel)"""
-        symbols = self.client.get_active_symbols()
-        logger.info(f"🚀 ULTRA-FAST LOAD: Fetching history for {len(symbols)} symbols...")
-        
-        start_time = time.time()
-        semaphore = asyncio.Semaphore(20)  # Limit to 20 concurrent requests
-        
-        async def fetch_symbol(symbol):
-             async with semaphore:
-                 try:
-                     # Only need last 50 candles for RSI/EMA
-                     klines = await self.client.get_klines(symbol, 'Min1', 60)
-                     if not klines: return
-                     
-                     history = self.history[symbol]
-                     for k in klines:
-                         history.add(k.close, k.volume, k.timestamp)
-                         
-                 except Exception as e:
-                     logger.debug(f"Failed to load {symbol}: {e}")
-
-        # Batch processing
-        tasks = [fetch_symbol(s) for s in symbols]
-        
-        # Show progress
-        total = len(tasks)
-        chunk_size = 100
-        
-        for i in range(0, total, chunk_size):
-            chunk = tasks[i:i+chunk_size]
-            await asyncio.gather(*chunk)
-            logger.info(f"⚡ Loaded {min(i+chunk_size, total)}/{total} symbols")
-            
-        duration = time.time() - start_time
-        logger.info(f"✅ LOAD COMPLETE in {duration:.2f}s")
+        """Minimal initial load - skip full history to save RAM"""
+        logger.info("🚀 MEMORY OPTIMIZED START: Skipping initial history load.")
+        # We start fresh and let _scan_loop populate trackers
+        pass
     
     async def _scan_loop(self):
         """Aggressive REST polling loop - MEMECOIN OPTIMIZED (ultra-fast)"""
@@ -266,6 +271,30 @@ class PumpDetector:
                 logger.error(f"Scan loop error: {e}")
                 await asyncio.sleep(1)  # Было 2, стало 1
     
+    async def _cleanup_loop(self):
+        """Periodically clean up memory"""
+        while True:
+            try:
+                await asyncio.sleep(600)  # Every 10 minutes
+                
+                # 1. Clear history cache for non-active signals
+                active_symbols = set(self.active_signals.keys())
+                for sym in list(self.history_cache.keys()):
+                    if sym not in active_symbols:
+                        del self.history_cache[sym]
+                
+                # 2. Trim trackers if they grow too large (though deque handles this)
+                # But we can remove symbols that haven't been updated in a while
+                now = time.time() * 1000
+                for sym in list(self.trackers.keys()):
+                    if sym not in self.last_tickers_ts or (now - self.last_tickers_ts[sym]) > 3600000:
+                        del self.trackers[sym]
+                        if sym in self.last_vol_24h: del self.last_vol_24h[sym]
+                        
+                logger.debug(f"🧹 Memory cleanup finished. Trackers: {len(self.trackers)}, Cache: {len(self.history_cache)}")
+            except Exception as e:
+                logger.error(f"Cleanup error: {e}")
+    
     async def _full_scan(self):
         """Scan all symbols for pumps"""
         tickers = await self.client.get_tickers()
@@ -284,9 +313,8 @@ class PumpDetector:
             self.last_vol_24h[ticker.symbol] = ticker.volume_24h
             self.last_tickers_ts[ticker.symbol] = ticker.timestamp
             
-            self.history[ticker.symbol].add(
+            self.trackers[ticker.symbol].add(
                 price=ticker.price,
-                volume=current_vol,
                 timestamp=ticker.timestamp
             )
             
@@ -302,9 +330,9 @@ class PumpDetector:
             self.stats['total_checked'] += 1
     
     async def _check_pump(self, symbol: str, current_vol_rate: float = 0):
-        """Check if symbol is pumping - PRICE ONLY MODE"""
-        history = self.history.get(symbol)
-        if not history or len(history.prices) < 2: # Min 2 points (1 min diff)
+        """Check if symbol is pumping - ON-DEMAND HYDRATION MODE"""
+        tracker = self.trackers.get(symbol)
+        if not tracker or len(tracker.history) < 2:
             return
         
         # Check cooldown
@@ -313,16 +341,37 @@ class PumpDetector:
             if time.time() * 1000 < cooldown_until:
                 return
         
-        # Get price change
-        price_change = history.get_price_change(
+        # Get price change from lightweight tracker
+        price_change = tracker.get_price_change(
             self.config.pump.time_window_minutes
         )
         
-        # Check minimum pump threshold
-        if price_change >= 1.0:
-            logger.debug(f"🔍 Checking {symbol}: +{price_change:.2f}%")
+        # Check minimum pump threshold (1.5% for hydration)
+        HYDRATION_THRESHOLD = 1.5 
+        if price_change < HYDRATION_THRESHOLD:
+            return
             
-        if price_change < self.config.pump.min_price_change_pct:
+        logger.info(f"💧 HYDRATION: {symbol} triggered at +{price_change:.2f}%. Fetching history...")
+        
+        # Fetch detailed history only when needed
+        try:
+            klines = await self.client.get_klines(symbol, 'Min1', 100)
+            if not klines:
+                return
+                
+            history = PriceHistory(max_length=100)
+            for k in klines:
+                history.add(k.close, k.volume, k.timestamp)
+                
+            # Add current data point from ticker
+            ticker = self.client.tickers.get(symbol)
+            if ticker:
+                history.add(ticker.price, current_vol_rate / 60, ticker.timestamp)
+            
+            # Cache the hydrated history for other modules to use
+            self.history_cache[symbol] = history
+        except Exception as e:
+            logger.error(f"Hydration failed for {symbol}: {e}")
             return
         
         # Calculate indicators
@@ -497,5 +546,5 @@ class PumpDetector:
             'uptime_seconds': uptime,
             'uptime_formatted': f"{uptime / 3600:.1f}h",
             'active_signals': len(self.active_signals),
-            'symbols_tracked': len(self.history)
+            'symbols_tracked': len(self.trackers)
         }

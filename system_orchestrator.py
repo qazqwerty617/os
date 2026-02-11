@@ -374,7 +374,7 @@ class SystemOrchestrator:
         self.smart_filter.record_pump(symbol)
         
         rsi_val = 50.0
-        hist = self.pump_detector.history.get(symbol)
+        hist = self.pump_detector.history_cache.get(symbol)
         if hist and len(hist.prices) >= 14 and hist.volumes:
             try:
                 rsi_val = calculate_all_indicators(hist.prices, hist.volumes, hist.volumes[-1]).rsi
@@ -503,7 +503,7 @@ class SystemOrchestrator:
             # Calculate real RSI and fetch OI
             rsi_val = 50.0
             oi_val = 0.0
-            history = self.pump_detector.history.get(symbol)
+            history = self.pump_detector.history_cache.get(symbol)
             if history and len(history.prices) >= 14:
                 from indicators import calculate_all_indicators
                 indicators = calculate_all_indicators(history.prices, history.volumes, history.volumes[-1])
@@ -557,7 +557,7 @@ class SystemOrchestrator:
         
         # Enhanced Analysis logic с умными уровнями
         from indicators import calculate_all_indicators
-        history = self.pump_detector.history.get(symbol)
+        history = self.pump_detector.history_cache.get(symbol)
         if history:
             # Записать свечи в smart_levels для анализа
             ticker = self.client.tickers.get(symbol)

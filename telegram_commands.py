@@ -213,16 +213,22 @@ class TelegramCommands:
     
     def _get_main_keyboard(self):
         """Get main menu keyboard"""
+        from config import config
+        dash_url = config.dashboard.public_url or f"http://{config.dashboard.host if config.dashboard.host != '0.0.0.0' else 'IP_ADDRESS'}:8081/mobile"
         return {
             "inline_keyboard": [
-                [{"text": "🚀 Open Dashboard", "url": "http://207.180.212.179:8081/mobile"}],
+                [{"text": "📱 OPEN DASHBOARD / ТЕРМИНАЛ", "url": dash_url}],
                 [
-                    {"text": "📊 Stats", "callback_data": "stats"},
-                    {"text": "🎯 Signals", "callback_data": "signals"}
+                    {"text": "📊 STATS / ИТОГИ", "callback_data": "stats"},
+                    {"text": "🎯 SIGNALS / СИГНАЛЫ", "callback_data": "signals"}
                 ],
                 [
-                    {"text": "⏸️ Pause", "callback_data": "pause"},
-                    {"text": "▶️ Resume", "callback_data": "resume"}
+                    {"text": "🏥 HEALTH / СОСТОЯНИЕ", "callback_data": "health"},
+                    {"text": "⚙️ STATUS / СТАТУС", "callback_data": "status"}
+                ],
+                [
+                    {"text": "⏸️ PAUSE", "callback_data": "pause"},
+                    {"text": "▶️ RESUME", "callback_data": "resume"}
                 ]
             ]
         }
@@ -231,20 +237,21 @@ class TelegramCommands:
     
     async def _cmd_start(self, ctx: CommandContext) -> str:
         msg = """
-🚀 <b>MEXC PUMP MONITOR</b>
+🤖 <b>ALPHA MONSTER TERMINAL</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+<i>Next-gen Pump Detection Engine</i>
 
-Welcome! I track pumps and generate trading signals on MEXC Futures.
+Welcome! Бот отслеживает аномальные движения MEXC Futures в реальном времени.
 
-<b>Commands:</b>
-/stats - Bot statistics
-/signals - Recent signals  
-/top - Top pumps today
-/health - System health
-/pause - Pause notifications
-/resume - Resume
-/help - This help
+📡 <b>COMMANDS / КОМАНДЫ:</b>
+├ /stats — Profit & Metrics / Итоги
+├ /signals — Recent signals / Сигналы
+├ /health — System status / Состояние
+└ /help — Info / Справка
 
-<i>Happy trading! 💰</i>
+<b>MONITORING:</b> 🟢 ACTIVE / АКТИВЕН
+
+<i>Trade smart. 💰</i>
 """
         await self._reply(ctx, msg, reply_markup=self._get_main_keyboard())
         return None
@@ -254,25 +261,27 @@ Welcome! I track pumps and generate trading signals on MEXC Futures.
             try:
                 s = self.stats_provider()
                 return f"""
-📊 <b>BOT STATISTICS</b>
+📊 <b>TRADING STATS / СТАТИСТИКА</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-⏱️ Uptime: {s.get('uptime', 'N/A')}
-📈 Signals today: {s.get('signals_today', 0)}
-🔥 Pumps detected: {s.get('pumps_detected', 0)}
-✅ Win Rate: {s.get('win_rate', 'N/A')}
+⏱️ <b>UPTIME:</b> {s.get('uptime', 'N/A')}
+📈 <b>DAILY SIGNALS:</b> {s.get('signals_today', 0)}
+🔥 <b>PUMPS FOUND:</b> {s.get('pumps_detected', 0)}
+✅ <b>WIN RATE:</b> {s.get('win_rate', 'N/A')}
 
-📡 Symbols: {s.get('symbols', 0)}
-🔄 Updates/sec: {s.get('updates_per_sec', 0)}
+📡 <b>TRACKED:</b> {s.get('symbols', 0)} pairs
+🔄 <b>SPEED:</b> {s.get('updates_per_sec', 0)} rec/s
 """
             except:
                 pass
         
         return """
 📊 <b>STATISTICS</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-⏱️ Bot running
-📈 Monitoring active
-🔄 Collecting stats...
+⏱️ Bot is operational
+📈 Collecting real-time data...
+🔄 Пожалуйста, подождите...
 """
     
     async def _cmd_signals(self, ctx: CommandContext) -> str:
@@ -310,22 +319,25 @@ Feature in development...
             try:
                 h = self.health_provider()
                 return f"""
-🏥 <b>SYSTEM HEALTH</b>
+🏥 <b>СОСТОЯНИЕ СИСТЕМЫ</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-💻 CPU: {h.get('cpu', 0):.1f}%
-🧠 RAM: {h.get('memory', 0):.1f}%
-📡 API: {'🟢 OK' if h.get('api_ok') else '🔴 Error'}
-🔌 WS: {'🟢 Connected' if h.get('ws_ok') else '🔴 Disconnected'}
+💻 <b>CPU:</b> {h.get('cpu', 0):.1f}%
+🧠 <b>RAM:</b> {h.get('memory', 0):.1f}%
+📡 <b>MEXC API:</b> {'🟢 OK' if h.get('api_ok') else '🔴 Error'}
+🔌 <b>Websocket:</b> {'🟢 OK' if h.get('ws_ok') else '🔴 Error'}
 
-⏱️ Uptime: {h.get('uptime', 'N/A')}
+⏱️ <b>Uptime:</b> {h.get('uptime', 'N/A')}
+⚙️ <b>Статус:</b> Operational
 """
             except:
                 pass
         
         return """
-🏥 <b>SYSTEM HEALTH</b>
+🏥 <b>СОСТОЯНИЕ СИСТЕМЫ</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-🟢 All systems operational
+🟢 Все системы работают в штатном режиме
 """
     
     async def _cmd_status(self, ctx: CommandContext) -> str:

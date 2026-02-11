@@ -156,23 +156,20 @@ class TelegramNotifier:
     
     async def send_startup_message(self, symbols_count: int = 0) -> bool:
         """Send startup notification"""
+        from config import config
+        dash_url = config.dashboard.public_url or f"http://{config.dashboard.host if config.dashboard.host != '0.0.0.0' else 'IP_ADDRESS'}:8081/mobile"
+        
         msg = f"""
-🚀 <b>MEXC PUMP MONITOR ЗАПУЩЕН!</b>
+🚀 <b>ALPHA MONSTER TERMINAL: ON</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-✅ <b>Статус:</b> Активен
-📊 <b>Символов:</b> {symbols_count}
-🧠 <b>AI Prediction:</b> ON
-📰 <b>News Parser:</b> ON
-📱 <b>Dashboard:</b> http://localhost:8081/mobile
+✅ <b>SYSTEM:</b> Online / Запущен
+📊 <b>MONITOR:</b> {symbols_count} pairs
+🧠 <b>AI ENGINE:</b> Active / Активен
+📱 <b>DASHBOARD:</b> <a href="{dash_url}">Open Terminal</a>
 
-🔔 Уведомления:
-├ 🔥 Пампы (15-50%+)
-├ 🆕 Новые листинги
-├ 📊 SHORT сигналы
-└ 📰 Важные новости
-
-<i>Удачного трейдинга! 💰</i>
+📡 <i>Waiting for high-quality signals...</i>
+└ Ожидаем идеальные точки входа.
 """
         return await self.send_message(msg)
 

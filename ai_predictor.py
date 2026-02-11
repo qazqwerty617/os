@@ -119,9 +119,7 @@ class AIPumpPredictor:
     }
     
     def __init__(self):
-        self.price_history: Dict[str, deque] = {}
-        self.volume_history: Dict[str, deque] = {}
-        self.predictions_history: deque = deque(maxlen=500)  # Limited to prevent memory leak
+        self.predictions_history: deque = deque(maxlen=200)  # Reduced from 500
         
         self.factor_weights = self.DEFAULT_WEIGHTS.copy()
         self.learning_rate = 1.0
@@ -138,15 +136,8 @@ class AIPumpPredictor:
         }
     
     def record_data(self, symbol: str, price: float, volume: float, timestamp: int = None):
-        """Record data for learning"""
-        timestamp = timestamp or int(time.time() * 1000)
-        
-        if symbol not in self.price_history:
-            self.price_history[symbol] = deque(maxlen=500)
-            self.volume_history[symbol] = deque(maxlen=500)
-        
-        self.price_history[symbol].append({'price': price, 'ts': timestamp})
-        self.volume_history[symbol].append({'volume': volume, 'ts': timestamp})
+        """No longer used internally - history is hydrated on-demand"""
+        pass
     
     def predict(
         self,
@@ -159,7 +150,8 @@ class AIPumpPredictor:
         is_manipulation: bool = False,
         manipulation_confidence: int = 0,
         news_score: int = 0,
-        news_sentiment: float = 0
+        news_sentiment: float = 0,
+        historical_prices: List[float] = None
     ) -> PumpPrediction:
         """Predict pump/dump with optimized calculations"""
         now = int(time.time() * 1000)
@@ -195,10 +187,9 @@ class AIPumpPredictor:
         
         # Momentum score
         momentum_score = 50
-        prices = self.price_history.get(symbol)
-        if prices and len(prices) >= 10:
-            price_list = [p['price'] for p in list(prices)[-10:]]
-            if len(price_list) >= 2 and price_list[0] > 0:
+        price_list = historical_prices[-10:] if historical_prices else []
+        if len(price_list) >= 10:
+            if price_list[0] > 0:
                 change = (price_list[-1] - price_list[0]) / price_list[0] * 100
                 if change >= 5:
                     momentum_score = 90
@@ -379,6 +370,15 @@ class OrderFlowAnalyzer:
             'accumulation_detected': 0,
             'distribution_detected': 0
         }
+    
+    def cleanup(self, symbols_to_keep: List[str]):
+        """Remove inactive symbols from memory"""
+        for sym in list(self.data.keys()):
+            if sym not in symbols_to_keep:
+                del self.data[sym]
+                del self.trade_timestamps[sym]
+                if sym in self.cumulative_delta:
+                    del self.cumulative_delta[sym]
     
     def record_trade(
         self,
