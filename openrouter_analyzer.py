@@ -20,8 +20,10 @@ class OpenRouterAnalyzer:
         # Use config if available, otherwise fallback to env
         try:
             from config import config
-            self.api_keys = api_keys or config.openrouter.api_key.split(',')
-        except:
+            raw_key = config.openrouter.api_key if config.openrouter.api_key else os.getenv('OPENROUTER_API_KEY', '')
+            self.api_keys = api_keys or raw_key.split(',')
+        except Exception as e:
+            logger.debug(f"Config import failed in analyzer: {e}")
             self.api_keys = api_keys or os.getenv('OPENROUTER_API_KEY', '').split(',')
             
         # Paranoia cleaning: remove spaces, newlines, and quotes

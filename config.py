@@ -11,12 +11,18 @@ from pathlib import Path
 # Load environment variables from .env
 env_path = Path(__file__).parent / '.env'
 if env_path.exists():
+    import logging
+    _logger = logging.getLogger("ConfigLoader")
     with open(env_path) as f:
         for line in f:
             line = line.strip()
             if line and not line.startswith('#') and '=' in line:
-                key, value = line.split('=', 1)
-                os.environ[key.strip()] = value.strip()
+                key_part, val_part = line.split('=', 1)
+                k = key_part.strip()
+                v = val_part.strip().strip("'").strip('"')
+                os.environ[k] = v
+                if "API_KEY" in k:
+                    _logger.debug(f"Loaded env var: {k} (len: {len(v)})")
 
 
 
@@ -151,7 +157,7 @@ class OpenRouterConfig:
     model: str = "google/gemini-2.0-flash-exp"
     
     def __post_init__(self):
-        self.api_key = os.getenv('OPENROUTER_API_KEY')
+        self.api_key = os.getenv('OPENROUTER_API_KEY', '')
 
 @dataclass
 class GroqConfig:
