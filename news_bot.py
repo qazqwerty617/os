@@ -129,8 +129,9 @@ class NewsBot:
     
     SEEN_IDS_FILE = "data/seen_news_ids.json"
     
-    def __init__(self, telegram=None):
+    def __init__(self, telegram=None, openrouter=None):
         self.telegram = telegram
+        self.openrouter = openrouter
         self._session: Optional[aiohttp.ClientSession] = None
         
         # News storage (Optimized for VPS with limited RAM)
@@ -816,99 +817,72 @@ RU_TITLE: Professional Russian translation
 
 JSON ONLY. BE ULTRA-CONSERVATIVE. IF NOT 100% SURE, LOWER THE RELIABILITY AND IMPORTANCE."""
 
-                max_retries = len(config.groq.api_keys)
-                for attempt in range(max_retries):
-                    api_key, key_idx = self._get_current_key()
-                    if not api_key:
-                        return None
-                    
-                    logger.debug(f"🤖 Groq Analysis: Using key {key_idx + 1}/{len(config.groq.api_keys)}")
-                    
-                    # Anti-spam delay: Free tier needs AT LEAST 2.5-3.0s regardless of key count
-                    await asyncio.sleep(2.5)
+                # 1. Attempt Groq with rotation
+                if config.groq.api_keys:
+                    max_retries = len(config.groq.api_keys)
+                    for attempt in range(max_retries):
+                        api_key, key_idx = self._get_current_key()
+                        if not api_key: break
+                        
+                        logger.debug(f"🤖 Groq Analysis attempt {attempt+1}/{max_retries}")
+                        await asyncio.sleep(2.0) # Rate limit safety
 
-                    session = await self._get_session()
+                        session = await self._get_session()
+                        try:
+                            async with session.post(
+                                f"{config.groq.base_url}/chat/completions",
+                                headers={
+                                    "Authorization": f"Bearer {api_key}",
+                                    "Content-Type": "application/json"
+                                },
+                                json={
+                                    "model": config.groq.model,
+                                    "messages": [{"role": "user", "content": prompt}],
+                                    "temperature": 0.1,
+                                    "max_tokens": 500
+                                },
+                                timeout=15
+                            ) as resp:
+                                if resp.status == 200:
+                                    data = await resp.json()
+                                    content = data['choices'][0]['message']['content']
+                                    
+                                    if '{' in content and '}' in content:
+                                        try:
+                                            start = content.find('{')
+                                            end = content.rfind('}') + 1
+                                            result = json.loads(content[start:end])
+                                            
+                                            # Filter out noise/fakes
+                                            if result.get('is_fake', False) or not result.get('is_crypto_relevant', True):
+                                                result['importance'] = 0
+                                            
+                                            return result
+                                        except:
+                                            continue
+                        except Exception as e:
+                            logger.debug(f"Groq iteration error: {e}")
+                            continue
+
+                # 2. Fallback to OpenRouter (Reliable Backup with Smart Tiering)
+                if self.openrouter:
+                    # Heuristic to detect high-impact news before calling AI
+                    urgent_kw = ["listing", "binance", "coinbase", "hack", "exploit", "sec", "lawsuit", "court", "etf", "blackrock", "scam", "breach"]
+                    is_urgent = any(kw in title.lower() or kw in summary.lower() for kw in urgent_kw)
+                    
+                    if is_urgent:
+                        logger.info(f"� CRITICAL NEWS: {title[:40]}... (Using TOP MODELS)")
+                    else:
+                        logger.info(f"🔄 OpenRouter fallback: {title[:40]}...")
+                        
                     try:
-                        async with session.post(
-                            f"{config.groq.base_url}/chat/completions",
-                            headers={
-                                "Authorization": f"Bearer {api_key}",
-                                "Content-Type": "application/json"
-                            },
-                            json={
-                                "model": config.groq.model,
-                                "messages": [{"role": "user", "content": prompt}],
-                                "temperature": 0.1,
-                                "max_tokens": 300
-                            },
-                            timeout=12
-                        ) as resp:
-                            if resp.status == 200:
-                                data = await resp.json()
-                                content = data['choices'][0]['message']['content']
-                                
-                                if '{' in content and '}' in content:
-                                    start = content.find('{')
-                                    end = content.rfind('}') + 1
-                                    result = json.loads(content[start:end])
-                                    
-                                    orig = result.get('importance', 50)
-                                    rel = result.get('reliability', 50)
-                                    
-                                    # === IDEAL FILTERS ===
-                                    if result.get('is_fake', False):
-                                        logger.info(f"🚫 FAKE: {title[:40]}...")
-                                        result['importance'] = 0
-                                        return result
-                                    if result.get('is_clickbait', False):
-                                        logger.info(f"🚫 CLICKBAIT: {title[:40]}...")
-                                        result['importance'] = 0
-                                        return result
-                                    if not result.get('is_crypto_relevant', True):
-                                        logger.info(f"🚫 NOT CRYPTO: {title[:40]}...")
-                                        result['importance'] = 0
-                                        return result
-                                    
-                                    # Penalties
-                                    if rel < 30: result['importance'] = min(orig, 15)
-                                    elif rel < 50: result['importance'] = int(orig * 0.7)
-                                    if not result.get('is_actionable', True):
-                                        result['importance'] = int(result['importance'] * 0.7)
-                                    
-                                    # Boosts
-                                    if result.get('urgency') == 'immediate' and rel >= 70:
-                                        result['importance'] = min(100, result['importance'] + 15)
-                                    if tokens and result.get('is_actionable') and rel >= 60:
-                                        result['importance'] = min(100, result['importance'] + 10)
-                                    
-                                    logger.debug(f"✅ {title[:35]}... | {orig}→{result['importance']} | rel:{rel}")
-                                    return result
-                                return None
-                            
-                            elif resp.status == 429:
-                                logger.warning(f"⏳ Groq Key {key_idx + 1} Rate Limited (429). Cooling down 5s...")
-                                await asyncio.sleep(5)
-                                if attempt < max_retries - 1:
-                                    continue
-                                else:
-                                    await asyncio.sleep(5) # All keys spent
-                            elif resp.status == 401:
-                                logger.error(f"🔑 Groq Key {key_idx + 1} is INVALID (401). Skipping...")
-                                if attempt < max_retries - 1:
-                                    continue
-                            else:
-                                logger.warning(f"⚠️ Groq API Error {resp.status} on Key {key_idx + 1}")
-                                if attempt < max_retries - 1:
-                                    continue
-                                return None
+                        return await self.openrouter.analyze_news(title, summary, tokens, high_impact=is_urgent)
                     except Exception as e:
-                        logger.debug(f"Request failed on Key {key_idx + 1}: {e}")
-                        if attempt < max_retries - 1: continue
-                        return None
-                
+                        logger.error(f"OpenRouter news fallback failed: {e}")
+
                 return None
             except Exception as e:
-                logger.debug(f"Groq logic failed: {e}")
+                logger.error(f"AI News analysis logic failed: {e}")
                 return None
 
     async def _translate_text(self, text: str) -> str:

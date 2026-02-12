@@ -121,9 +121,11 @@ class EconomicCalendar:
     - При публикации результата
     """
     
-    def __init__(self, telegram=None, orchestrator=None):
+    def __init__(self, telegram=None, orchestrator=None, groq=None, openrouter=None):
         self.telegram = telegram
         self.orchestrator = orchestrator
+        self.groq = groq
+        self.openrouter = openrouter
         self._session: Optional[aiohttp.ClientSession] = None
         
         # Календарь событий
@@ -275,22 +277,39 @@ class EconomicCalendar:
         if self.orchestrator:
             self.orchestrator.pause_news_parser(15) # Пауза на 15 секунд
             
-        # 2. Попытка получить фактические данные (в реальности тут был бы запрос к API)
-        # Для демонстрации или если API не успел - Groq может "угадать" или мы берем последний прогноз
+        # 2. Попытка получить фактические данные (Actual)
         actual_val = event.actual or "Ожидается..." 
         
-        # 3. Вызов Groq для анализа
-        groq = getattr(self.orchestrator, 'groq', None)
+        # 3. Анализ ИИ (Groq с фоллбеком на OpenRouter)
         analysis = None
-        if groq:
-            analysis = await groq.analyze_economic_result(
-                event_title=event.title,
-                actual=actual_val,
-                forecast=event.forecast,
-                previous=event.previous,
-                description=event.description
-            )
+        
+        # Сначала пробуем Groq
+        if self.groq:
+            try:
+                analysis = await self.groq.analyze_economic_result(
+                    event_title=event.title,
+                    actual=actual_val,
+                    forecast=event.forecast,
+                    previous=event.previous,
+                    description=event.description
+                )
+            except Exception as e:
+                logger.warning(f"Groq analysis failed: {e}")
+
+        # Если Groq не сработал - пробуем OpenRouter
+        if not analysis and self.openrouter:
+            logger.info(f"🔄 Falling back to OpenRouter for event: {event.title}")
+            try:
+                # Используем метод анализа из OpenRouterAnalyzer с флагом важности
+                is_high = event.impact in [EventImpact.HIGH, EventImpact.CRITICAL]
+                analysis = await self.openrouter.analyze_event_result(event.__dict__, actual_val, high_impact=is_high)
+            except Exception as e:
+                logger.error(f"OpenRouter analysis failed: {e}")
             
+        if not analysis:
+            logger.warning(f"Could not get AI analysis for {event.title}")
+            return
+
         # 4. Формирование и отправка алерта
         verdict = analysis.get('verdict', 'NEUTRAL') if analysis else 'NEUTRAL'
         verdict_emoji = "🚀 LONG" if verdict == 'LONG' else "📉 SHORT" if verdict == 'SHORT' else "⚪ NEUTRAL"

@@ -68,7 +68,8 @@ from hedge_manager import HedgeManager
 from smart_levels import SmartLevelsCalculator
 from global_listings import GlobalListingWatcher
 from indicators import calculate_all_indicators
-from groq_analyzer import groq_analyzer
+from groq_analyzer import GroqAnalyzer
+from openrouter_analyzer import OpenRouterAnalyzer
 
 logger = logging.getLogger("Orchestrator")
 
@@ -159,10 +160,11 @@ class SystemOrchestrator:
         self.pnl_reporter = PnLReporter(self.telegram)
         self.news_parser = CryptoNewsParser(self.telegram)
         # self.mobile_dashboard already initialized above
-        self.news_bot = NewsBot(telegram=self.telegram)
+        self.news_bot = NewsBot(telegram=self.telegram, openrouter=self.openrouter)
         self.contract_scanner = ContractScanner(self.telegram)
-        self.groq = groq_analyzer
-        self.economic_calendar = EconomicCalendar(self.telegram, orchestrator=self)
+        self.groq = GroqAnalyzer()
+        self.openrouter = OpenRouterAnalyzer()
+        self.economic_calendar = EconomicCalendar(self.telegram, orchestrator=self, groq=self.groq, openrouter=self.openrouter)
         self.market_heatmap = MarketHeatMap(telegram=self.telegram, mexc_client=self.client)
         
         # 8. Execution Engines
@@ -358,7 +360,11 @@ class SystemOrchestrator:
         
         for mod in modules_to_stop:
             try:
-                if hasattr(mod, 'stop'): await mod.stop()
+                if hasattr(mod, 'stop'):
+                    # 🕒 NEW: Add 3s timeout per module to prevent hanging
+                    await asyncio.wait_for(mod.stop(), timeout=3.0)
+            except asyncio.TimeoutError:
+                logger.warning(f"⚠️ Shutdown timeout for {mod.__class__.__name__} - skipping")
             except Exception as e:
                 logger.warning(f"Error stopping {mod}: {e}")
         

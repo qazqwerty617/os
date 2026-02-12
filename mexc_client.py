@@ -159,7 +159,7 @@ class MEXCClient:
                         return {}
                     else:
                         text = await resp.text()
-                        logger.warning(f"API {resp.status}: {text[:100]}")
+                        logger.warning(f"⚠️ API {resp.status} at {url}: {text[:100]}")
                         return {}
                         
             except asyncio.TimeoutError:

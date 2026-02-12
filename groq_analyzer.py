@@ -71,6 +71,8 @@ STRICT ANALYSIS STEPS:
 2. MACRO LOGIC: Explain EXACTLY why this is Bullish/Bearish for BTC (e.g., "Weak NFP = Dovish Fed = Bullish Risk").
 3. VOLATILITY PROJECTION: Estimate the immediate (5-15 min) BTC % move based on this delta size and historical correlation.
 
+STRICT RULE: ALL TEXTUAL FIELDS (summary, key_points, market_reaction_expected) MUST BE IN RUSSIAN (НА РУССКОМ ЯЗЫКЕ).
+
 Respond in JSON format:
 {{
     "verdict": "LONG|SHORT|NEUTRAL",
@@ -78,12 +80,12 @@ Respond in JSON format:
     "importance": "Rate 1-10 (precise scale)",
     "btc_move_projection": "BTC % expected move (e.g. +1.45% or -0.85%)",
     "delta_analysis": "Calculated delta and its mathematical significance",
-    "summary": "1 sentence technical summary in Russian (NO generic words)",
+    "summary": "1 sentence technical summary in RUSSIAN (РУССКИЙ ЯЗЫК)",
     "key_points": [
-        "Point 1: Exact numerical impact in Russian",
-        "Point 2: Institutional sentiment outcome in Russian"
+        "Point 1 in RUSSIAN",
+        "Point 2 in RUSSIAN"
     ],
-    "market_reaction_expected": "Precise BTC price action scenario in Russian"
+    "market_reaction_expected": "Precise BTC price action scenario in RUSSIAN"
 }}
 
 STRICT RULE: Avoid "volatility expected" or "could be". Use specific percentages and directional bias.
