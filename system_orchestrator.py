@@ -389,11 +389,6 @@ class SystemOrchestrator:
             except Exception:
                 pass
         vol_mult = min(pump_signal.volume_usd / 1e6, 99.9) if pump_signal.volume_usd else 1
-        self.mobile_dashboard.add_signal(
-            symbol=symbol, side='LONG', change=pump_signal.price_change_pct,
-            score=pump_signal.score, rsi=rsi_val, volume=vol_mult, pnl=0,
-            entry_price=pump_signal.price, current_price=pump_signal.price
-        )
         
         # 🆕 Check Multi-Exchange Listings & Get Prices
         is_new_listing, new_listing_details = self.global_listings.is_new_listing(symbol, max_age_hours=24)
@@ -530,12 +525,20 @@ class SystemOrchestrator:
                     signal_source="NEWS_LONG"
                 )
                 
-                # Update dashboard signal with entry price
-                for sig in self.mobile_dashboard.data.get('signals', []):
-                    if sig.get('symbol') == symbol and sig.get('side') == 'LONG':
-                        sig['entry_price'] = long_entry
-                        sig['current_price'] = long_entry
-                        break
+                self.mobile_dashboard.add_signal(
+                    symbol=symbol, side='LONG', change=pump_signal.price_change_pct,
+                    score=min(score, 100), rsi=rsi_val, volume=vol_mult, pnl=0,
+                    entry_price=long_entry, current_price=long_entry
+                )
+            
+        elif pump_reason_type == "NEW_LISTING":
+            # LISTING — alert only, NO auto-trade (too risky)
+            logger.info(f"🆕 LISTING DETECTED: {symbol} — alert only, no trade")
+            self.mobile_dashboard.add_signal(
+                symbol=symbol, side='LISTING', change=pump_signal.price_change_pct,
+                score=pump_signal.score, rsi=rsi_val, volume=vol_mult, pnl=0,
+                entry_price=pump_signal.price, current_price=pump_signal.price
+            )
             
         else:
             # No News? SHORT MODE 📉 (The "Pivot")
