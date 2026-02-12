@@ -153,13 +153,16 @@ class MEXCClient:
                         logger.warning(f"⚠️ MEXC rate limit (429), waiting {wait_time:.0f}s")
                         await asyncio.sleep(wait_time)
                         continue
+                    elif resp.status == 404:
+                        # Quietly return empty dict for 404
+                        return {}
                     elif resp.status == 403:
                         # Forbidden - likely geo-blocked
                         logger.debug(f"API 403: {endpoint}")
                         return {}
                     else:
                         text = await resp.text()
-                        logger.warning(f"⚠️ API {resp.status} at {url}: {text[:100]}")
+                        logger.debug(f"API {resp.status} at {url}: {text[:100]}")
                         return {}
                         
             except asyncio.TimeoutError:
@@ -247,6 +250,9 @@ class MEXCClient:
 
     async def get_ticker(self, symbol: str) -> Optional[Ticker]:
         """Get single ticker - FUTURES API"""
+        if symbol not in self.symbols:
+            return self.tickers.get(symbol)
+            
         endpoint = f'/api/v1/contract/ticker/{symbol}'
         data = await self._request('GET', endpoint)
         
@@ -272,14 +278,10 @@ class MEXCClient:
         interval: str = 'Min1',
         limit: int = 100
     ) -> List[Kline]:
-        """
-        Get candlestick data - FUTURES API
-        
-        Args:
-            symbol: Trading pair symbol
-            interval: Candle interval (Min1, Min5, Min15, Min30, Hour1, etc.)
-            limit: Number of candles to fetch
-        """
+        """Get candlestick data - FUTURES API"""
+        if symbol not in self.symbols:
+            return []
+            
         endpoint = f'/api/v1/contract/kline/{symbol}'
         
         now = int(time.time())
@@ -344,16 +346,10 @@ class MEXCClient:
         return klines
     
     async def get_orderbook(self, symbol: str, depth: int = 20) -> Optional[Dict]:
-        """
-        Get order book - FUTURES API
-        
-        Args:
-            symbol: Trading pair symbol
-            depth: Depth of order book (default 20)
-        
-        Returns:
-            {'bids': [(price, qty), ...], 'asks': [(price, qty), ...]}
-        """
+        """Get order book - FUTURES API"""
+        if symbol not in self.symbols:
+            return None
+            
         endpoint = f'/api/v1/contract/depth/{symbol}'
         params = {'limit': depth}
         
