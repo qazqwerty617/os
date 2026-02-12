@@ -59,12 +59,10 @@ fi
 # 4. Launch Orchestrator
 echo -e "\nRocket engines engaging... 🚀"
 echo -e "Starting System Orchestrator (Main Brain)..."
-echo -e "Dashboard: http://localhost:8000"
+echo -e "Dashboard: http://localhost:8080 | Mobile: http://localhost:8081/mobile"
 echo -e "----------------------------------------------------"
 
-# Run Main
-echo -e "🤖 Starting with AGGRESSIVE mode..."
-$PYTHON_CMD main.py --mode both --risk aggressive
+$PYTHON_CMD main.py
 
 # Exit handler
 echo -e "${CYAN}System shutdown complete.${NC}"

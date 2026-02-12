@@ -280,7 +280,7 @@ class ManipulationDetector:
         self.alerts.append(alert)
         self.stats['alerts_generated'] += 1
         
-        logger.warning(f"🚨 DISTRIBUTION: {symbol} - {alert.message}")
+        logger.info(f"🚨 DISTRIBUTION: {symbol} - {alert.message}")
         
         asyncio.create_task(self._notify_distribution(symbol, profile, alert))
     

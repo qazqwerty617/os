@@ -68,6 +68,7 @@ from hedge_manager import HedgeManager
 from smart_levels import SmartLevelsCalculator
 from global_listings import GlobalListingWatcher
 from indicators import calculate_all_indicators
+from groq_analyzer import groq_analyzer
 
 logger = logging.getLogger("Orchestrator")
 
@@ -146,8 +147,12 @@ class SystemOrchestrator:
             demo_mode=True, 
             max_positions=8, 
             initial_balance=config.demo.initial_balance,
+            max_position_size_pct=5,
             dashboard=self.mobile_dashboard
         )
+        # Set callback for dashboard sync
+        self.auto_trader.on_position_closed = self._on_position_closed
+        
         self.self_learning = SelfLearningEngine()
         
         # 7. Notifications & Reports
@@ -156,7 +161,8 @@ class SystemOrchestrator:
         # self.mobile_dashboard already initialized above
         self.news_bot = NewsBot(telegram=self.telegram)
         self.contract_scanner = ContractScanner(self.telegram)
-        self.economic_calendar = EconomicCalendar(self.telegram)
+        self.groq = groq_analyzer
+        self.economic_calendar = EconomicCalendar(self.telegram, orchestrator=self)
         self.market_heatmap = MarketHeatMap(telegram=self.telegram, mexc_client=self.client)
         
         # 8. Execution Engines
@@ -714,6 +720,27 @@ class SystemOrchestrator:
         msg = f"🆕 NEW LISTING: {listing.symbol}\nPotential: {listing.pump_potential}/100"
         await self.telegram.send_message(msg)
 
+    async def _on_position_closed(self, position, pnl_pct, pnl_usd, reason):
+        """Callback when position is closed in AutoTrader"""
+        symbol = position.symbol
+        side = position.side.value if hasattr(position.side, 'value') else str(position.side)
+        
+        logger.info(f"🎯 Position Closed: {symbol} ({side}) | P&L: ${pnl_usd:+.2f} ({pnl_pct:+.1f}%) | Reason: {reason}")
+        
+        # Remove from Mobile Dashboard active signals and add to history
+        if hasattr(self, 'mobile_dashboard'):
+            self.mobile_dashboard.remove_signal(
+                symbol=symbol,
+                pnl_usd=pnl_usd,
+                pnl_pct=pnl_pct
+            )
+        
+        # Track stats
+        if pnl_usd > 0:
+            self.stats['wins'] = self.stats.get('wins', 0) + 1
+        else:
+            self.stats['losses'] = self.stats.get('losses', 0) + 1
+
     # --- BACKGROUND LOOPS (Migrated & Simplified) ---
     async def _market_scan_loop(self):
         """Scan market continuously (Hybrid: REST Aggressive + WebSocket)"""
@@ -1052,8 +1079,12 @@ class SystemOrchestrator:
                 logger.info(f"🧹 Memory Maintenance: RAM {mem_before:.1f}% → {mem_after:.1f}%")
                 
             except Exception as e:
-                logger.error(f"Memory maintenance error: {e}")
                 await asyncio.sleep(60)
+
+    def pause_news_parser(self, duration: int = 15):
+        """Временно приостановить парсинг новостей (приоритет для Экономики/ИИ)"""
+        if hasattr(self, 'news_parser'):
+            self.news_parser.pause_monitor(duration)
 
 # Global Entry Point helper
 async def run_system(capital=100, risk='moderate'):

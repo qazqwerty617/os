@@ -63,6 +63,7 @@ class EconomicEvent:
     # Алерт отправлен
     alert_sent: bool = False
     result_alert_sent: bool = False
+    sent_thresholds: List[int] = field(default_factory=list)
 
 
 # Стандартные важные события
@@ -120,8 +121,9 @@ class EconomicCalendar:
     - При публикации результата
     """
     
-    def __init__(self, telegram=None):
+    def __init__(self, telegram=None, orchestrator=None):
         self.telegram = telegram
+        self.orchestrator = orchestrator
         self._session: Optional[aiohttp.ClientSession] = None
         
         # Календарь событий
@@ -171,7 +173,8 @@ class EconomicCalendar:
                 events = self._generate_upcoming_events()
             
             for event in events:
-                self.events[event.id] = event
+                if event.id not in self.events:
+                    self.events[event.id] = event
             
             self.last_fetch = datetime.utcnow()
             logger.info(f"📅 Loaded {len(self.events)} economic events")
@@ -190,60 +193,27 @@ class EconomicCalendar:
         events = []
         now = datetime.utcnow()
         
-        # CPI обычно выходит 13-14 числа каждого месяца
-        next_cpi = now.replace(
-            day=13, 
-            hour=12, 
-            minute=30, 
-            second=0, 
-            microsecond=0
-        )
-        if next_cpi < now:
-            if now.month == 12:
-                next_cpi = next_cpi.replace(year=now.year + 1, month=1)
-            else:
-                next_cpi = next_cpi.replace(month=now.month + 1)
-        
+        # CPI: 13 Feb 2026, 12:30 UTC
+        target_cpi = datetime(2026, 2, 13, 12, 30)
+        if target_cpi > now - timedelta(hours=24):
+            events.append(EconomicEvent(
+                id="cpi_20260213",
+                title="US CPI (YoY)",
+                event_type=EventType.CPI,
+                impact=EventImpact.CRITICAL,
+                datetime_utc=target_cpi,
+                country="US",
+                previous="3.4%",
+                forecast="2.9%",
+                description="Индекс потребительских цен (Инфляция). Один из самых волатильных отчетов.",
+                bullish_if="Ниже прогноза (<2.9%)",
+                bearish_if="Выше прогноза (>2.9%)"
+            ))
+
+        # NFP: 6 March 2026 (approx first friday)
+        next_nfp = datetime(2026, 3, 6, 13, 30)
         events.append(EconomicEvent(
-            id=f"cpi_{next_cpi.strftime('%Y%m')}",
-            title="US CPI (YoY)",
-            event_type=EventType.CPI,
-            impact=EventImpact.CRITICAL,
-            datetime_utc=next_cpi,
-            country="US",
-            description="Индекс потребительских цен США",
-            bullish_if="Ниже прогноза",
-            bearish_if="Выше прогноза"
-        ))
-        
-        # FOMC - каждые 6 недель (примерно)
-        next_fomc = now + timedelta(days=30)
-        next_fomc = next_fomc.replace(hour=18, minute=0)
-        
-        events.append(EconomicEvent(
-            id=f"fomc_{next_fomc.strftime('%Y%m%d')}",
-            title="FOMC Rate Decision",
-            event_type=EventType.FOMC,
-            impact=EventImpact.CRITICAL,
-            datetime_utc=next_fomc,
-            country="US",
-            description="Решение ФРС по ставке",
-            bullish_if="Снижение или pause",
-            bearish_if="Повышение"
-        ))
-        
-        # NFP - первая пятница месяца
-        next_nfp = now.replace(day=1)
-        while next_nfp.weekday() != 4:  # Пятница
-            next_nfp += timedelta(days=1)
-        if next_nfp < now:
-            next_nfp = (next_nfp.replace(day=1) + timedelta(days=32)).replace(day=1)
-            while next_nfp.weekday() != 4:
-                next_nfp += timedelta(days=1)
-        next_nfp = next_nfp.replace(hour=12, minute=30)
-        
-        events.append(EconomicEvent(
-            id=f"nfp_{next_nfp.strftime('%Y%m')}",
+            id="nfp_20260306",
             title="US Non-Farm Payrolls",
             event_type=EventType.NFP,
             impact=EventImpact.HIGH,
@@ -265,16 +235,24 @@ class EconomicCalendar:
                 for event_id, event in list(self.events.items()):
                     time_to_event = (event.datetime_utc - now).total_seconds() / 3600
                     
-                    # Проверить нужен ли алерт
+                    # 1. Проверить предупреждающие алерты (24ч, 1ч)
                     if not event.alert_sent:
                         for hours in self.alert_before_hours:
                             if hours - 0.5 <= time_to_event <= hours + 0.5:
-                                await self.send_event_alert(event, hours)
-                                if hours == 1:
-                                    event.alert_sent = True
+                                if hours not in event.sent_thresholds:
+                                    await self.send_event_alert(event, hours)
+                                    event.sent_thresholds.append(hours)
+                                    if hours == min(self.alert_before_hours):
+                                        event.alert_sent = True
                                 break
                     
-                    # Удалить старые события
+                    # 2. Проверить публикацию результата (Actual)
+                    if not event.result_alert_sent and -0.01 <= time_to_event <= 0.2:
+                        # Время публикации пришло!
+                        await self.handle_event_result(event)
+                        event.result_alert_sent = True
+
+                    # Удалить совсем старые события
                     if time_to_event < -24:
                         del self.events[event_id]
                 
@@ -287,8 +265,76 @@ class EconomicCalendar:
             except Exception as e:
                 logger.error(f"Calendar monitor error: {e}")
             
-            await asyncio.sleep(300)  # Проверять каждые 5 минут
-    
+            await asyncio.sleep(60) # Чаще проверяем в моменты выхода новостей
+
+    async def handle_event_result(self, event: EconomicEvent):
+        """Обработать выход данных и отправить ИИ-анализ"""
+        logger.info(f"🔔 Event time reached: {event.title}. Analyzing results...")
+        
+        # 1. Пауза новостей для приоритета ИИ
+        if self.orchestrator:
+            self.orchestrator.pause_news_parser(15) # Пауза на 15 секунд
+            
+        # 2. Попытка получить фактические данные (в реальности тут был бы запрос к API)
+        # Для демонстрации или если API не успел - Groq может "угадать" или мы берем последний прогноз
+        actual_val = event.actual or "Ожидается..." 
+        
+        # 3. Вызов Groq для анализа
+        groq = getattr(self.orchestrator, 'groq', None)
+        analysis = None
+        if groq:
+            analysis = await groq.analyze_economic_result(
+                event_title=event.title,
+                actual=actual_val,
+                forecast=event.forecast,
+                previous=event.previous,
+                description=event.description
+            )
+            
+        # 4. Формирование и отправка алерта
+        verdict = analysis.get('verdict', 'NEUTRAL') if analysis else 'NEUTRAL'
+        verdict_emoji = "🚀 LONG" if verdict == 'LONG' else "📉 SHORT" if verdict == 'SHORT' else "⚪ NEUTRAL"
+        
+        msg = f"""
+📅 <b>ECONOMIC RESULT ALERT</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+{event.impact.value} | <b>{event.title}</b>
+
+📊 <b>Фактическое:</b> {actual_val}
+🎯 <b>Прогноз:</b> {event.forecast}
+📉 <b>Предыдущее:</b> {event.previous}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🤖 <b>ИИ ВЕРДИКТ (Groq):</b>
+👉 <b>{verdict_emoji}</b>
+
+🔥 <b>ВАЖНОСТЬ:</b> {analysis.get('importance', 'N/A')}/10
+⚡ <b>ПРОГНОЗ ВОЛАТИЛЬНОСТИ BTC:</b> {analysis.get('btc_move_projection', '±0.5%')}
+
+🔢 <b>АНАЛИЗ ДЕЛЬТЫ:</b>
+{analysis.get('delta_analysis', 'Расчет отклонения в процессе...')}
+
+📝 <b>СУТЬ:</b>
+{analysis.get('summary', 'Данные вышли. Рынок анализирует волатильность.') if analysis else 'Анализ временно недоступен.'}
+
+💡 <b>ДЕТАЛИ:</b>
+"""
+        if analysis and analysis.get('key_points'):
+            for pt in analysis['key_points']:
+                msg += f"• {pt}\n"
+        else:
+            msg += "• Дождитесь реакции цены\n• Повышенная волатильность\n"
+
+        msg += f"""
+🎯 <b>Ожидаемая реакция:</b>
+{analysis.get('market_reaction_expected', 'Неопределено') if analysis else 'Следите за графиком'}
+"""
+
+        if self.telegram:
+            await self.telegram.send_message(msg)
+        else:
+            logger.info(f"Economic result: {event.title} -> {verdict}")    
     async def send_event_alert(self, event: EconomicEvent, hours_before: float):
         """Отправить алерт о событии"""
         

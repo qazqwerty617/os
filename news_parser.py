@@ -150,6 +150,16 @@ class CryptoNewsParser:
             'bullish_count': 0,
             'bearish_count': 0
         }
+        
+        # Pause feature
+        self._is_paused = False
+        self._pause_until = 0
+    
+    def pause_monitor(self, duration_sec: int = 15):
+        """Временно приостановить обработку новостей"""
+        self._is_paused = True
+        self._pause_until = time.time() + duration_sec
+        logger.warning(f"⏸️ News Parser paused for {duration_sec}s for high-priority alert")
     
     async def fetch_news(self, limit: int = 20) -> List[Dict]:
         """Получить новости из различных источников"""
@@ -455,6 +465,15 @@ class CryptoNewsParser:
         
         while True:
             try:
+                # Check pause
+                if self._is_paused:
+                    if time.time() > self._pause_until:
+                        self._is_paused = False
+                        logger.info("▶️ News Parser resumed")
+                    else:
+                        await asyncio.sleep(1)
+                        continue
+                
                 await self.parse_and_notify()
                 await asyncio.sleep(interval_minutes * 60)
             except Exception as e:

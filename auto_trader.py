@@ -469,7 +469,11 @@ class AutoTrader:
         close_quantity = position.quantity * (close_pct / 100)
         notional_closed = close_quantity * position.entry_price
         margin_closed = notional_closed / leverage
-        pnl_usd = notional_closed * (pnl_pct / 100)  # Leverage is embedded in notional
+        # P&L USD = (Entry - Exit) * Quantity for SHORT
+        if position.side == PositionSide.SHORT:
+            pnl_usd = (position.entry_price - exit_price) * close_quantity
+        else:
+            pnl_usd = (exit_price - position.entry_price) * close_quantity
         
         leveraged_pnl_pct = pnl_pct * leverage  # For display: e.g. 2% * 20x = 40%
         

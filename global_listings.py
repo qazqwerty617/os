@@ -30,6 +30,7 @@ class GlobalListingWatcher:
         self._is_first_run = True  # Flag to handle first scan properly
         
         self.listings: Dict[str, Dict[str, int]] = {}
+        self.failed_exchanges: Set[str] = set()
         self._callbacks: List[callable] = []
         self._load_listings()
         
@@ -117,20 +118,27 @@ class GlobalListingWatcher:
         discovery_time = now if not self._is_first_run else now - (30 * 24 * 3600 * 1000)
         
         for idx, symbols in enumerate(results):
+            exchange_name = self.EXCHANGES[idx]
             if isinstance(symbols, Exception) or not symbols:
                 logger.debug(f"Skipping {self.EXCHANGES[idx]} due to empty or error result")
+                self.failed_exchanges.add(exchange_name)
                 continue
+            
+            # If we successfully fetched this, remove from failed
+            self.failed_exchanges.discard(exchange_name)
                 
-            exchange_name = self.EXCHANGES[idx]
             for sym in symbols:
                 sym_upper = sym.upper()
                 if sym_upper not in self.listings:
                     self.listings[sym_upper] = {}
                 
                 if exchange_name not in self.listings[sym_upper]:
-                    # Use discovery_time: now for real new listings, old for first run
-                    self.listings[sym_upper][exchange_name] = discovery_time
-                    if not self._is_first_run:
+                    # STRATEGY: If this exchange was previously failed, don't mark as "new"
+                    # Use a very old timestamp to treat it as "discovered but old"
+                    use_now = not self._is_first_run and exchange_name not in self.failed_exchanges
+                    self.listings[sym_upper][exchange_name] = now if use_now else discovery_time
+                    
+                    if use_now:
                         logger.info(f"✨ NEW LISTING: {sym_upper} on {exchange_name}")
                         # Notify callbacks
                         for cb in self._callbacks:

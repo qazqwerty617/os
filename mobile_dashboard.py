@@ -870,6 +870,28 @@ MOBILE_DASHBOARD_HTML = '''
         </div>`;
     }
 
+    /* === HISTORY CARD === */
+    function renderHistoryCard(s) {
+        const sym = (s.symbol || '').replace('_USDT','').replace('USDT','');
+        const pnl = s.pnl_usd || 0;
+        const roi = s.pnl_pct || 0;
+        const c = pnl >= 0 ? 'up' : 'dn';
+        const side = s.side || 'LONG';
+        
+        return `<div class="sig-card ${side.toLowerCase()}">
+            <div class="sig-left">
+                <div class="sig-sym">${sym} <span style="font-size:0.6rem;opacity:0.6">${side}</span></div>
+                <div class="sig-meta">
+                    <span>${new Date(s.time).toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'})}</span>
+                </div>
+            </div>
+            <div class="sig-right">
+                <div class="sig-pnl ${c}">$${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}</div>
+                <div class="sig-change ${c}">${roi >= 0 ? '+' : ''}${roi.toFixed(1)}%</div>
+            </div>
+        </div>`;
+    }
+
     /* === UPDATE UI === */
     function updateUI() {
         // PnL hero
@@ -885,18 +907,23 @@ MOBILE_DASHBOARD_HTML = '''
         document.getElementById('statWinrate').textContent = data.stats.winrate + '%';
         document.getElementById('statBalance').textContent = '$' + (data.stats.balance || 0).toFixed(0);
 
-        // Signals
+        // Active Signals
         const sl = document.getElementById('signalsList');
-        const al = document.getElementById('allSignalsList');
         const badge = document.getElementById('sigBadge');
         badge.textContent = data.signals.length;
 
         if (data.signals.length > 0) {
-            sl.innerHTML = data.signals.slice(0, 6).map((s,i) => renderSignalCard(s, i===0, i)).join('');
-            al.innerHTML = data.signals.map((s,i) => renderSignalCard(s, false, i)).join('');
+            sl.innerHTML = data.signals.slice(0, 10).map((s,i) => renderSignalCard(s, i===0, i)).join('');
         } else {
             sl.innerHTML = '<div class="empty"><div class="empty-icon">📭</div><div class="empty-text">Нет активных сигналов</div></div>';
-            al.innerHTML = '<div class="empty"><div class="empty-icon">📭</div><div class="empty-text">Нет сигналов</div></div>';
+        }
+
+        // History Signals (allSignalsList)
+        const al = document.getElementById('allSignalsList');
+        if (data.closed_signals && data.closed_signals.length > 0) {
+            al.innerHTML = data.closed_signals.map(renderHistoryCard).join('');
+        } else {
+            al.innerHTML = '<div class="empty"><div class="empty-icon">📭</div><div class="empty-text">История пуста</div></div>';
         }
 
         // News
@@ -1033,19 +1060,13 @@ class MobileDashboard:
         self.data = {
             'pnl': {'today': 0, 'allTime': 0, 'trades': 0},
             'stats': {
-                'pumps': 0,
-                'signals': 0,
-                'winrate': 0,
-                'balance': 100,
-                'totalTrades': 0,
-                'wins': 0,
-                'losses': 0,
-                'profitFactor': 0
+                'pumps': 0, 'signals': 0, 'winrate': 0, 'balance': 0,
+                'totalTrades': 0, 'wins': 0, 'losses': 0, 'profitFactor': 0
             },
             'signals': [],
+            'closed_signals': [],
             'news': [],
-            'pnlHistory': [],
-            'trades': []
+            'pnlHistory': []
         }
         
         self.app = None
@@ -1122,7 +1143,23 @@ class MobileDashboard:
         entry_price: float = 0,
         current_price: float = 0
     ):
-        """Добавить сигнал"""
+        """Добавить/обновить сигнал"""
+        # Deduplication: check if already in signals
+        for sig in self.data['signals']:
+            if sig['symbol'] == symbol:
+                # Update existing
+                sig['side'] = side
+                sig['change'] = change
+                sig['score'] = score
+                sig['rsi'] = rsi
+                sig['volume'] = volume
+                sig['entry_price'] = entry_price if entry_price > 0 else sig['entry_price']
+                sig['current_price'] = current_price if current_price > 0 else sig['current_price']
+                sig['time'] = datetime.now().isoformat()
+                asyncio.ensure_future(self._broadcast_ws())
+                return
+
+        # Create new
         signal = {
             'symbol': symbol,
             'side': side,
@@ -1138,11 +1175,35 @@ class MobileDashboard:
         
         self.data['signals'].insert(0, signal)
         
-        # Ограничить до 50 сигналов
+        # Ограничить до 50 активных
         self.data['signals'] = self.data['signals'][:50]
         
         # Instant broadcast to all WS clients
         asyncio.ensure_future(self._broadcast_ws())
+
+    def remove_signal(self, symbol: str, pnl_usd: float = 0, pnl_pct: float = 0):
+        """Удалить из активных и добавить в историю"""
+        found = None
+        for i, sig in enumerate(self.data['signals']):
+            if sig['symbol'] == symbol:
+                found = self.data['signals'].pop(i)
+                break
+        
+        if found:
+            # Add to history
+            history_item = {
+                'symbol': symbol,
+                'side': found.get('side', 'LONG'),
+                'pnl_usd': pnl_usd,
+                'pnl_pct': pnl_pct,
+                'time': datetime.now().isoformat()
+            }
+            self.data.setdefault('closed_signals', []).insert(0, history_item)
+            # Limit history to 100
+            self.data['closed_signals'] = self.data['closed_signals'][:100]
+            
+            asyncio.ensure_future(self._broadcast_ws())
+            logger.info(f"📱 Signal closed and archived: {symbol} (${pnl_usd:+.2f})")
     
     def update_signal_prices(self, prices: dict):
         """Update live prices for active signals. prices = {symbol: current_price}"""
