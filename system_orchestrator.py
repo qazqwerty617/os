@@ -276,7 +276,7 @@ class SystemOrchestrator:
                 whale_det=self.whale_detector,
                 news=self.news_bot,
                 sig_engine=self.signal_engine,
-                perf=self.perf_tracker
+                perf=self.performance
             )
             config_obj = uvicorn.Config(app, host=config.dashboard.host, port=self.dashboard_port, log_level="warning")
             self._dashboard_server = uvicorn.Server(config_obj)
