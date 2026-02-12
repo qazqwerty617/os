@@ -962,12 +962,26 @@ JSON ONLY. BE ULTRA-CONSERVATIVE. IF NOT 100% SURE, LOWER THE RELIABILITY AND IM
         news_id = f"listing_{exchange}_{symbol}_{int(time.time())}"
         title = f"BINANCE NEW LISTING: {symbol}" if "BINANCE" in exchange.upper() else f"NEW LISTING: {symbol} on {exchange}"
         
+        # Map exchange to correct announcement URL
+        exchange_urls = {
+            'binance': 'https://www.binance.com/en/support/announcement/new-cryptocurrency-listing',
+            'bingx': 'https://bingx.com/en/support/announcement/',
+            'okx': 'https://www.okx.com/support/hc/en-us/sections/360000030652-New-Listings',
+            'bybit': 'https://announcements.bybit.com/en/new-coin-listings/',
+            'gate': 'https://www.gate.io/articlelist/ann/0',
+            'gate.io': 'https://www.gate.io/articlelist/ann/0',
+            'kucoin': 'https://www.kucoin.com/news/categories/new-listings',
+            'bitget': 'https://www.bitget.com/support/sections/new-listings',
+            'mexc': 'https://www.mexc.com/support/sections/360000679912',
+        }
+        listing_url = exchange_urls.get(exchange.lower(), f'https://www.google.com/search?q={symbol}+listing+{exchange}')
+        
         news = NewsItem(
             news_id=news_id,
             source=NewsSource.WATCHER_GURU, # Use as proxy
             title=title,
             summary=f"Exchange {exchange} has just listed {symbol}. This is a high-volatility event.",
-            url=f"https://www.binance.com/en/support/announcement",
+            url=listing_url,
             timestamp=int(time.time() * 1000),
             sentiment=NewsSentiment.VERY_BULLISH,
             sentiment_score=0.9,

@@ -22,7 +22,7 @@ class LightweightTracker:
     """Minimized tracker for baseline monitoring (saves 90% RAM)"""
     last_price: float = 0.0
     # Store price per minute to detect changes over window
-    history: deque = field(default_factory=lambda: deque(maxlen=30)) 
+    history: deque = field(default_factory=lambda: deque(maxlen=55))  # 55 min for multi-tier
     last_minute_ts: int = 0
 
     def add(self, price: float, timestamp: int):
@@ -333,8 +333,16 @@ class PumpDetector:
             await self._check_pump(ticker.symbol, current_vol_rate=current_vol_rate)
             self.stats['total_checked'] += 1
     
+    # Multi-tier pump thresholds: (time_window_minutes, min_pct_change, tier_label)
+    PUMP_TIERS = [
+        (50, 50.0, 'EXTREME'),   # 50%+ за 50 мин
+        (30, 30.0, 'STRONG'),    # 30%+ за 30 мин
+        (10, 15.0, 'MEDIUM'),    # 15%+ за 10 мин
+        (5,   8.0, 'FAST'),      #  8%+ за  5 мин
+    ]
+
     async def _check_pump(self, symbol: str, current_vol_rate: float = 0):
-        """Check if symbol is pumping - ON-DEMAND HYDRATION MODE"""
+        """Check if symbol is pumping - MULTI-TIER detection"""
         tracker = self.trackers.get(symbol)
         if not tracker or len(tracker.history) < 2:
             return
@@ -345,23 +353,42 @@ class PumpDetector:
             if time.time() * 1000 < cooldown_until:
                 return
         
-        # Get price change from lightweight tracker
-        price_change = tracker.get_price_change(
-            self.config.pump.time_window_minutes
-        )
+        # Multi-tier check: find the best matching tier
+        best_tier = None
+        best_change = 0
+        best_window = 0
         
-        # Check minimum pump threshold (1.5% for hydration)
-        HYDRATION_THRESHOLD = 1.5 
-        if price_change < HYDRATION_THRESHOLD:
+        for window_min, threshold_pct, tier_label in self.PUMP_TIERS:
+            if len(tracker.history) < min(window_min, 2):
+                continue
+            change = tracker.get_price_change(window_min)
+            if change >= threshold_pct:
+                # Pick the highest-tier (first match = strongest)
+                if best_tier is None:
+                    best_tier = tier_label
+                    best_change = change
+                    best_window = window_min
+                break  # PUMP_TIERS sorted strongest first
+        
+        # Fallback: also check the single config threshold
+        config_change = tracker.get_price_change(self.config.pump.time_window_minutes)
+        if config_change >= 4.0 and best_tier is None:
+            best_tier = 'CONFIG'
+            best_change = config_change
+            best_window = self.config.pump.time_window_minutes
+        
+        if best_tier is None:
             return
+        
+        price_change = best_change
             
-        # 1. Check Hydration Cooldown (Stop spamming logs and API)
+        # Hydration cooldown
         now = time.time()
         last_h = self.last_hydrated.get(symbol, 0)
         if now - last_h < self.hydration_cooldown_sec:
             return
 
-        logger.info(f"💧 HYDRATION: {symbol} triggered at +{price_change:.2f}%. Fetching history...")
+        logger.info(f"💧 [{best_tier}] {symbol} +{price_change:.1f}% in {best_window}min")
         self.last_hydrated[symbol] = now
         
         # Fetch detailed history only when needed

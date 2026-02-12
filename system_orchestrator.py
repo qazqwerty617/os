@@ -298,7 +298,7 @@ class SystemOrchestrator:
                 ts = getattr(news, 'timestamp', 0) or 0
                 age = (time.time() * 1000 - ts) / 60000
                 time_ago = f"{int(age)} мин" if age < 60 else f"{age/60:.0f}ч"
-                self.mobile_dashboard.add_news(sig, news.title[:100], src, time_ago)
+                self.mobile_dashboard.add_news(sig, news.title[:100], src, time_ago, url=getattr(news, 'url', ''))
             except Exception as e:
                 logger.debug(f"News to dashboard: {e}")
         self.news_bot.on_news(_on_news_to_dashboard)
@@ -394,17 +394,6 @@ class SystemOrchestrator:
             score=pump_signal.score, rsi=rsi_val, volume=vol_mult, pnl=0
         )
         
-        # 💎 Fetch Market Cap
-        base_asset = symbol.split('_')[0] if '_' in symbol else symbol.replace('USDT', '')
-        mcap_str = "Unavailable"
-        if token_info and token_info.market_cap > 0:
-            if token_info.market_cap >= 1_000_000_000:
-                mcap_str = f"${token_info.market_cap / 1_000_000_000:.1f}B"
-            elif token_info.market_cap >= 1_000_000:
-                mcap_str = f"${token_info.market_cap / 1_000_000:.1f}M"
-            else:
-                mcap_str = f"${token_info.market_cap:,.0f}"
-        
         # 🆕 Check Multi-Exchange Listings & Get Prices
         is_new_listing, new_listing_details = self.global_listings.is_new_listing(symbol, max_age_hours=24)
         
@@ -412,6 +401,13 @@ class SystemOrchestrator:
         base_asset = symbol.split('_')[0] if '_' in symbol else symbol.replace('USDT', '')
         mcap_str = "Unavailable"
         token_info = await self.tokenomics.get_tokenomics(base_asset)
+        if token_info and token_info.market_cap > 0:
+            if token_info.market_cap >= 1_000_000_000:
+                mcap_str = f"${token_info.market_cap / 1_000_000_000:.1f}B"
+            elif token_info.market_cap >= 1_000_000:
+                mcap_str = f"${token_info.market_cap / 1_000_000:.1f}M"
+            else:
+                mcap_str = f"${token_info.market_cap:,.0f}"
         
         # 🛡️ LISTING SAFEGUARD: If token has high MC, it's almost certainly NOT a new listing
         # unless it's on a Major exchange (Binance/OKX)
@@ -568,7 +564,7 @@ class SystemOrchestrator:
                      stop_loss=entry_obj.stop_loss,
                      take_profit1=entry_obj.tp1,
                      take_profit2=entry_obj.tp2 if hasattr(entry_obj, 'tp2') else entry_obj.tp1 * 0.95,
-                     leverage=entry_obj.leverage_recommended if hasattr(entry_obj, 'leverage_recommended') else 3,
+                     leverage=20,
                      confidence=entry_obj.confidence if hasattr(entry_obj, 'confidence') else 70,
                      signal_source="PUMP_FADE"
                  )
@@ -881,7 +877,7 @@ class SystemOrchestrator:
                            
                            is_manip, conf = self.manipulation.is_single_entity_pump(pump.symbol)
                            if is_manip:
-                                logger.warning(f"🎯 MANIPULATION: {pump.symbol} ({conf}%)")
+                                logger.debug(f"🎯 MANIPULATION: {pump.symbol} ({conf}%)")
                                 
                  await asyncio.sleep(5)
              except Exception as e:

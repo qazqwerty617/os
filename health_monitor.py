@@ -138,7 +138,7 @@ class HealthMonitor:
         
         self._running = False
         self._last_report_time = 0
-        self._report_interval = 3600  # Every hour
+        self._report_interval = 28800  # Every 8 hours
         self._last_alert_time: Dict[str, float] = {}  # Cooldown per alert type
         self._alert_cooldown = 1800  # 30 minutes cooldown
     
