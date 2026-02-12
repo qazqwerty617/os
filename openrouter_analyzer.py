@@ -34,19 +34,20 @@ class OpenRouterAnalyzer:
         # Smart Tiering: High-performance free models
         self.top_models = [
             "meta-llama/llama-3.3-70b-instruct:free",
-            "google/gemini-flash-1.5:free"
+            "meta-llama/llama-3.1-70b-instruct:free"
         ]
         
         # Regular pool: Stable backup models
         self.regular_models = [
-            "openrouter/free",
-            "google/gemma-7b-it:free",
-            "qwen/qwen-2-7b-instruct:free"
+            "meta-llama/llama-3.1-8b-instruct:free",
+            "mistralai/mistral-7b-instruct:free",
+            "openrouter/free"
         ]
         
+        self.session = None
         self.enabled = len(self.api_keys) > 0
         if self.enabled:
-            logger.info(f"🚀 OpenRouter Analyzer initialized with {len(self.api_keys)} keys (Tiered Logic enabled)")
+            logger.info(f"🚀 OpenRouter Analyzer initialized with {len(self.api_keys)} keys (Session-optimized)")
         else:
             logger.warning("⚠️ OpenRouter disabled (no OPENROUTER_API_KEY)")
 
@@ -144,7 +145,10 @@ STRICT RULE: 'ru_title' MUST be in high-quality financial Russian.
         return None
 
     async def _make_request(self, prompt: str, model: str, system_prompt: str = "Financial analyst") -> Optional[Dict]:
-        """Make request to OpenRouter with retries"""
+        """Make request to OpenRouter with retries and session reuse"""
+        if not self.session or self.session.closed:
+            self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25))
+            
         headers = {
             "Authorization": f"Bearer {self._get_current_key()}",
             "Content-Type": "application/json",
@@ -162,39 +166,44 @@ STRICT RULE: 'ru_title' MUST be in high-quality financial Russian.
 
         try:
             logger.debug(f"📡 Sending OpenRouter request to {model}...")
-            async with aiohttp.ClientSession() as session:
-                async with session.post(self.base_url, headers=headers, json=payload, timeout=25) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        if 'choices' not in data or not data['choices']:
-                            logger.error(f"❌ OpenRouter empty response for {model}: {data}")
-                            return None
-                            
-                        content = data['choices'][0]['message']['content'].strip()
-                        logger.info(f"✅ OpenRouter Success [{model}]: {content[:50]}...")
+            async with self.session.post(self.base_url, headers=headers, json=payload) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if 'choices' not in data or not data['choices']:
+                        logger.error(f"❌ OpenRouter empty response for {model}: {data}")
+                        return None
                         
-                        # Flexible JSON extraction
-                        try:
-                            # Try direct load
-                            return json.loads(content)
-                        except:
-                            # Try extracting from code blocks
-                            if "```json" in content:
-                                content = content.split("```json")[1].split("```")[0].strip()
-                            elif "```" in content:
-                                content = content.split("```")[1].split("```")[0].strip()
-                            return json.loads(content)
-                            
-                    elif resp.status == 429:
-                        logger.warning(f"⚠️ OpenRouter Rate Limit for {model}")
-                        self._rotate_key()
-                    elif resp.status == 401:
-                        logger.error(f"❌ Invalid OpenRouter API Key (Key index: {self.current_key_index})")
-                        self._rotate_key()
-                    else:
-                        error_text = await resp.text()
-                        logger.error(f"❌ OpenRouter API Error {resp.status} for {model}: {error_text}")
+                    content = data['choices'][0]['message']['content'].strip()
+                    logger.info(f"✅ OpenRouter Success [{model}]: {content[:50]}...")
+                    
+                    # Flexible JSON extraction
+                    try:
+                        return json.loads(content)
+                    except:
+                        if "```json" in content:
+                            content = content.split("```json")[1].split("```")[0].strip()
+                        elif "```" in content:
+                            content = content.split("```")[1].split("```")[0].strip()
+                        return json.loads(content)
+                        
+                elif resp.status == 429:
+                    logger.warning(f"⚠️ OpenRouter Rate Limit for {model}")
+                    self._rotate_key()
+                elif resp.status == 401:
+                    logger.error(f"❌ Invalid OpenRouter API Key")
+                    self._rotate_key()
+                elif resp.status == 404:
+                    logger.error(f"❌ OpenRouter 404: Model {model} not found/available. Skipping.")
+                else:
+                    error_text = await resp.text()
+                    logger.error(f"❌ OpenRouter API Error {resp.status} for {model}: {error_text[:100]}")
         except Exception as e:
-            logger.error(f"💥 OpenRouter Request Fatal error ({model}): {e}")
+            logger.error(f"💥 OpenRouter Fatal error ({model}): {str(e)[:100]}")
             
         return None
+
+    async def close(self):
+        """Cleanup session on shutdown"""
+        if self.session and not self.session.closed:
+            await self.session.close()
+            logger.debug("OpenRouter session closed")
