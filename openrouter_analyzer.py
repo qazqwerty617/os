@@ -143,11 +143,17 @@ STRICT RULE: 'ru_title' MUST be in high-quality financial Russian.
         }
 
         try:
+            logger.debug(f"📡 Sending OpenRouter request to {model}...")
             async with aiohttp.ClientSession() as session:
                 async with session.post(self.base_url, headers=headers, json=payload, timeout=25) as resp:
                     if resp.status == 200:
                         data = await resp.json()
+                        if 'choices' not in data or not data['choices']:
+                            logger.error(f"❌ OpenRouter empty response for {model}: {data}")
+                            return None
+                            
                         content = data['choices'][0]['message']['content'].strip()
+                        logger.info(f"✅ OpenRouter Success [{model}]: {content[:50]}...")
                         
                         # Flexible JSON extraction
                         try:
@@ -165,11 +171,12 @@ STRICT RULE: 'ru_title' MUST be in high-quality financial Russian.
                         logger.warning(f"⚠️ OpenRouter Rate Limit for {model}")
                         self._rotate_key()
                     elif resp.status == 401:
-                        logger.error("❌ Invalid OpenRouter API Key")
+                        logger.error(f"❌ Invalid OpenRouter API Key (Key index: {self.current_key_index})")
                         self._rotate_key()
                     else:
-                        logger.warning(f"OpenRouter API Error {resp.status} for {model}: {await resp.text()}")
+                        error_text = await resp.text()
+                        logger.error(f"❌ OpenRouter API Error {resp.status} for {model}: {error_text}")
         except Exception as e:
-            logger.error(f"OpenRouter Request Error ({model}): {e}")
+            logger.error(f"💥 OpenRouter Request Fatal error ({model}): {e}")
             
         return None
