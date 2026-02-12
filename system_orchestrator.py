@@ -156,14 +156,14 @@ class SystemOrchestrator:
         
         self.self_learning = SelfLearningEngine()
         
-        # 7. Notifications & Reports
-        self.pnl_reporter = PnLReporter(self.telegram)
-        self.news_parser = CryptoNewsParser(self.telegram)
-        # self.mobile_dashboard already initialized above
-        self.news_bot = NewsBot(telegram=self.telegram, openrouter=self.openrouter)
-        self.contract_scanner = ContractScanner(self.telegram)
+        # 7. Notifications, Reports & Analyzers
         self.groq = GroqAnalyzer()
         self.openrouter = OpenRouterAnalyzer()
+        
+        self.pnl_reporter = PnLReporter(self.telegram)
+        self.news_parser = CryptoNewsParser(self.telegram)
+        self.news_bot = NewsBot(telegram=self.telegram, openrouter=self.openrouter)
+        self.contract_scanner = ContractScanner(self.telegram)
         self.economic_calendar = EconomicCalendar(self.telegram, orchestrator=self, groq=self.groq, openrouter=self.openrouter)
         self.market_heatmap = MarketHeatMap(telegram=self.telegram, mexc_client=self.client)
         
