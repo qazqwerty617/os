@@ -34,17 +34,15 @@ class OpenRouterAnalyzer:
         # Smart Tiering: High-performance free models
         self.top_models = [
             "meta-llama/llama-3.3-70b-instruct:free",
-            "meta-llama/llama-3.1-405b-instruct:free",
-            "google/gemini-pro-1.5-exp:free",
-            "qwen/qwen-2.5-72b-instruct:free"
+            "google/gemini-flash-1.5:free",
+            "meta-llama/llama-3.1-70b-instruct:free"
         ]
         
         # Regular pool for routine analysis
         self.regular_models = [
-            "meta-llama/llama-3.1-8b-instruct:free",
             "mistralai/mistral-7b-instruct:free",
-            "microsoft/phi-3-mini-128k-instruct:free",
-            "liquid/lfm-40b:free",
+            "google/gemma-7b-it:free",
+            "qwen/qwen-2-7b-instruct:free",
             "openrouter/free"
         ]
         
@@ -65,7 +63,7 @@ class OpenRouterAnalyzer:
             logger.info(f"🔄 Rotated to OpenRouter API key #{self.current_key_index}")
 
     async def analyze_event_result(self, event_data: Dict[str, Any], actual_data: str, high_impact: bool = False) -> Optional[Dict[str, Any]]:
-        """Analyze economic event outcome with tier selection"""
+        """Analyze economic event outcome with tier selection and global fallback"""
         if not self.enabled:
             return None
 
@@ -92,17 +90,22 @@ Return ONLY a JSON object:
 """
         system_prompt = "You are a professional crypto analyst at a hedge fund. You always respond in Russian and valid JSON."
         
-        # Exclusive pool selection
-        models_to_use = self.top_models if high_impact else self.regular_models
-        
-        for model in models_to_use:
+        # 1. Try preferred models first
+        preferred = self.top_models if high_impact else self.regular_models
+        for model in preferred:
             result = await self._make_request(prompt, model, system_prompt)
-            if result:
-                return result
+            if result: return result
+            
+        # 2. Global fallback to EVERYTHING else if preferred failed
+        all_others = self.regular_models if high_impact else self.top_models
+        for model in all_others:
+            result = await self._make_request(prompt, model, system_prompt)
+            if result: return result
+            
         return None
 
     async def analyze_news(self, title: str, summary: str, tokens: List[str], high_impact: bool = False) -> Optional[Dict]:
-        """Analyze news item with tier selection"""
+        """Analyze news item with tier selection and global fallback"""
         if not self.enabled:
             return None
             
@@ -128,13 +131,18 @@ STRICT RULE: 'ru_title' MUST be in high-quality financial Russian.
 """
         system_prompt = "You are an expert crypto news analyst. Respond in valid JSON."
         
-        # Exclusive pool selection
-        models_to_use = self.top_models if high_impact else self.regular_models
-        
-        for model in models_to_use:
+        # 1. Try preferred tier
+        preferred = self.top_models if high_impact else self.regular_models
+        for model in preferred:
             result = await self._make_request(prompt, model, system_prompt)
-            if result:
-                return result
+            if result: return result
+            
+        # 2. Global fallback to the other tier
+        all_others = self.regular_models if high_impact else self.top_models
+        for model in all_others:
+            result = await self._make_request(prompt, model, system_prompt)
+            if result: return result
+            
         return None
 
     async def _make_request(self, prompt: str, model: str, system_prompt: str = "Financial analyst") -> Optional[Dict]:
