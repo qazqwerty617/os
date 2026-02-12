@@ -824,11 +824,9 @@ JSON ONLY. BE ULTRA-CONSERVATIVE. IF NOT 100% SURE, LOWER THE RELIABILITY AND IM
                         api_key, key_idx = self._get_current_key()
                         if not api_key: break
                         
-                        logger.debug(f"🤖 Groq Analysis attempt {attempt+1}/{max_retries}")
-                        await asyncio.sleep(2.0) # Rate limit safety
-
                         session = await self._get_session()
                         try:
+                            # Reduced timeout and no sleep for faster rotation/fallback
                             async with session.post(
                                 f"{config.groq.base_url}/chat/completions",
                                 headers={
@@ -841,7 +839,7 @@ JSON ONLY. BE ULTRA-CONSERVATIVE. IF NOT 100% SURE, LOWER THE RELIABILITY AND IM
                                     "temperature": 0.1,
                                     "max_tokens": 500
                                 },
-                                timeout=15
+                                timeout=10
                             ) as resp:
                                 if resp.status == 200:
                                     data = await resp.json()
@@ -860,8 +858,15 @@ JSON ONLY. BE ULTRA-CONSERVATIVE. IF NOT 100% SURE, LOWER THE RELIABILITY AND IM
                                             return result
                                         except:
                                             continue
+                                elif resp.status == 429:
+                                    logger.warning(f"⚠️ Groq Key {key_idx + 1} Rate Limited. Fast fallback...")
+                                    # If rate limited, don't wait - try next key or fallback to OpenRouter immediately
+                                    if attempt == max_retries - 1:
+                                        break # Out of keys, trigger OpenRouter
+                                    continue # Try next key
                         except Exception as e:
                             logger.debug(f"Groq iteration error: {e}")
+                            if attempt == max_retries - 1: break
                             continue
 
                 # 2. Fallback to OpenRouter (Reliable Backup with Smart Tiering)
@@ -886,46 +891,61 @@ JSON ONLY. BE ULTRA-CONSERVATIVE. IF NOT 100% SURE, LOWER THE RELIABILITY AND IM
                 return None
 
     async def _translate_text(self, text: str) -> str:
-        """Translate text to Russian using Groq (Fallback)"""
+        """Translate text to Russian using Groq (Fallback) or OpenRouter"""
         async with self._ai_lock:
-            max_retries = len(config.groq.api_keys)
-            if max_retries == 0: return text
-            
-            for attempt in range(max_retries):
+            # 1. Try Groq
+            if config.groq.api_keys:
+                max_retries = len(config.groq.api_keys)
+                for attempt in range(max_retries):
+                    try:
+                        api_key, key_idx = self._get_current_key()
+                        if not api_key: break
+                        
+                        prompt = f"Translate this crypto news headline to professional Russian. Only return the translation, no extra text:\n\n{text}"
+                        
+                        session = await self._get_session()
+                        async with session.post(
+                            f"{config.groq.base_url}/chat/completions",
+                            headers={
+                                "Authorization": f"Bearer {api_key}",
+                                "Content-Type": "application/json"
+                            },
+                            json={
+                                "model": config.groq.model,
+                                "messages": [{"role": "user", "content": prompt}],
+                                "temperature": 0.1
+                            },
+                            timeout=8
+                        ) as resp:
+                            if resp.status == 200:
+                                res_json = await resp.json()
+                                translation = res_json['choices'][0]['message']['content'].strip()
+                                return translation.replace('"', '').replace('«', '').replace('»', '')
+                            elif resp.status == 429:
+                                logger.warning(f"⚠️ Groq Translation Rate Limited (Key {key_idx + 1}).")
+                                if attempt < max_retries - 1: continue
+                                break
+                    except Exception:
+                        if attempt < max_retries - 1: continue
+                        break
+
+            # 2. Try OpenRouter (Final Redundancy for Russian Language)
+            if self.openrouter:
+                logger.info(f"🔄 OpenRouter translation fallback for: {text[:30]}...")
                 try:
-                    api_key, key_idx = self._get_current_key()
-                    if not api_key: return text
-                    
-                    await asyncio.sleep(2.5)
-                    
-                    prompt = f"Translate this crypto news headline to professional Russian. Only return the translation, no extra text:\n\n{text}"
-                    
-                    session = await self._get_session()
-                    async with session.post(
-                        f"{config.groq.base_url}/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {api_key}",
-                            "Content-Type": "application/json"
-                        },
-                        json={
-                            "model": config.groq.model,
-                            "messages": [{"role": "user", "content": prompt}],
-                            "temperature": 0.1
-                        },
-                        timeout=10
-                    ) as resp:
-                        if resp.status == 200:
-                            res_json = await resp.json()
-                            translation = res_json['choices'][0]['message']['content'].strip()
-                            return translation.replace('"', '').replace('«', '').replace('»', '')
-                        elif resp.status in [401, 429]:
-                            logger.warning(f"⚠️ Translation failed (Error {resp.status}) on Key {key_idx + 1}. Cooling down...")
-                            await asyncio.sleep(5 if resp.status == 429 else 1)
-                            if attempt < max_retries - 1: continue
-                        return text
-                except Exception:
-                    if attempt < max_retries - 1: continue
-                    return text
+                    # Use a fast model for translation
+                    prompt = f"Translate to professional Russian (Financial/Crypto context). Return ONLY translation:\n{text}"
+                    result = await self.openrouter._make_request(prompt, "openrouter/free", "You are a professional translator.")
+                    if result and isinstance(result, str):
+                        return result.strip().replace('"', '')
+                    elif isinstance(result, dict) and 'choices' in result:
+                        # Sometimes OpenRouterAnalyzer._make_request returns the full dict 
+                        # depending on its internal logic. OpenRouterAnalyzer._make_request usually returns dict
+                        content = result['choices'][0]['message']['content'].strip()
+                        return content.replace('"', '')
+                except Exception as e:
+                    logger.debug(f"OpenRouter translation failed: {e}")
+            
             return text
 
     async def handle_external_listing(self, symbol: str, exchange: str):
