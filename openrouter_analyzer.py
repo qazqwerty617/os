@@ -17,8 +17,15 @@ class OpenRouterAnalyzer:
     """
     
     def __init__(self, api_keys: Optional[List[str]] = None):
-        self.api_keys = api_keys or os.getenv('OPENROUTER_API_KEY', '').split(',')
-        self.api_keys = [k.strip() for k in self.api_keys if k.strip()]
+        # Use config if available, otherwise fallback to env
+        try:
+            from config import config
+            self.api_keys = api_keys or config.openrouter.api_key.split(',')
+        except:
+            self.api_keys = api_keys or os.getenv('OPENROUTER_API_KEY', '').split(',')
+            
+        # Paranoia cleaning: remove spaces, newlines, and quotes
+        self.api_keys = [k.strip().strip("'").strip('"') for k in self.api_keys if k.strip()]
         self.current_key_index = 0
         self.base_url = "https://openrouter.ai/api/v1/chat/completions"
         

@@ -11,9 +11,9 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] %(n
 logger = logging.getLogger("TestOpenRouter")
 
 async def test_direct_api():
-    load_dotenv()
-    api_key = os.getenv('OPENROUTER_API_KEY', '').split(',')[0].strip()
-    logger.info(f"🔑 Тестируем первый ключ: {api_key[:10]}...")
+    from config import config
+    api_key = config.openrouter.api_key.split(',')[0].strip().strip("'").strip('"')
+    logger.info(f"🔑 Тестируем первый ключ (длина {len(api_key)}): {api_key[:10]}...{api_key[-5:]}")
     
     headers = {
         "Authorization": f"Bearer {api_key}",
