@@ -869,21 +869,20 @@ JSON ONLY. BE ULTRA-CONSERVATIVE. IF NOT 100% SURE, LOWER THE RELIABILITY AND IM
                             if attempt == max_retries - 1: break
                             continue
 
-                # 2. Fallback to OpenRouter (Reliable Backup with Smart Tiering)
+                # 2. Fallback to OpenRouter (ONLY for urgent/critical news to save 50 requests limit)
                 if self.openrouter:
-                    # Heuristic to detect high-impact news before calling AI
+                    # Heuristic for urgency
                     urgent_kw = ["listing", "binance", "coinbase", "hack", "exploit", "sec", "lawsuit", "court", "etf", "blackrock", "scam", "breach"]
                     is_urgent = any(kw in title.lower() or kw in summary.lower() for kw in urgent_kw)
                     
                     if is_urgent:
-                        logger.info(f"� CRITICAL NEWS: {title[:40]}... (Using TOP MODELS)")
+                        logger.info(f"🔥 CRITICAL NEWS (Fallback to OpenRouter): {title[:40]}...")
+                        try:
+                            return await self.openrouter.analyze_news(title, summary, tokens, high_impact=True)
+                        except Exception as e:
+                            logger.error(f"OpenRouter news fallback failed: {e}")
                     else:
-                        logger.info(f"🔄 OpenRouter fallback: {title[:40]}...")
-                        
-                    try:
-                        return await self.openrouter.analyze_news(title, summary, tokens, high_impact=is_urgent)
-                    except Exception as e:
-                        logger.error(f"OpenRouter news fallback failed: {e}")
+                        logger.debug(f"Skipping OpenRouter fallback for non-urgent news: {title[:30]}...")
 
                 return None
             except Exception as e:
@@ -929,18 +928,18 @@ JSON ONLY. BE ULTRA-CONSERVATIVE. IF NOT 100% SURE, LOWER THE RELIABILITY AND IM
                         if attempt < max_retries - 1: continue
                         break
 
-            # 2. Try OpenRouter (Final Redundancy for Russian Language)
+            # 2. Try OpenRouter (ONLY for important alerts to save 50 requests limit)
             if self.openrouter:
-                logger.info(f"🔄 OpenRouter translation fallback for: {text[:30]}...")
+                # Use Gemini as priority model for high quality translation
+                logger.info(f"🔄 OpenRouter (Gemini) translation fallback for: {text[:30]}...")
                 try:
-                    # Use a fast model for translation
                     prompt = f"Translate to professional Russian (Financial/Crypto context). Return ONLY translation:\n{text}"
-                    result = await self.openrouter._make_request(prompt, "openrouter/free", "You are a professional translator.")
+                    # Use Gemini directly as requested by user
+                    result = await self.openrouter._make_request(prompt, "google/gemini-2.0-flash-lite:free", "You are a professional translator.")
+                    
                     if result and isinstance(result, str):
                         return result.strip().replace('"', '')
                     elif isinstance(result, dict) and 'choices' in result:
-                        # Sometimes OpenRouterAnalyzer._make_request returns the full dict 
-                        # depending on its internal logic. OpenRouterAnalyzer._make_request usually returns dict
                         content = result['choices'][0]['message']['content'].strip()
                         return content.replace('"', '')
                 except Exception as e:
