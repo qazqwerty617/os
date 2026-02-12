@@ -33,19 +33,18 @@ class OpenRouterAnalyzer:
         
         # Smart Tiering: High-performance free models
         self.top_models = [
-            "google/gemini-2.0-flash-lite-preview-02-05:free",
             "meta-llama/llama-3.3-70b-instruct:free",
-            "qwen/qwen-2.5-72b-instruct:free"
+            "google/gemini-pro-1.5-exp:free",
+            "meta-llama/llama-3.1-70b-instruct:free"
         ]
         
         # Regular pool for routine analysis
         self.regular_models = [
-            "google/gemini-2.0-pro-exp-02-05:free",
-            "deepseek/deepseek-r1:free",
-            "meta-llama/llama-3.2-1b-instruct:free",
+            "google/gemini-flash-1.5-8b:free",
+            "meta-llama/llama-3.1-8b-instruct:free",
             "mistralai/mistral-7b-instruct:free",
-            "microsoft/phi-3-mini-128k-instruct:free",
-            "openrouter/auto"
+            "qwen/qwen-2-7b-instruct:free",
+            "microsoft/phi-3-mini-128k-instruct:free"
         ]
         
         self.enabled = len(self.api_keys) > 0
