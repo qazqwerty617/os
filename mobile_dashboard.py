@@ -527,6 +527,19 @@ MOBILE_DASHBOARD_HTML = '''
             text-transform: uppercase;
             margin-top: 2px;
         }
+        .live-dot-sm {
+            display: inline-block;
+            width: 6px; height: 6px;
+            border-radius: 50%;
+            background: #00e5ff;
+            margin-right: 4px;
+            vertical-align: middle;
+            animation: livePulse 1.5s infinite;
+        }
+        @keyframes livePulse {
+            0%, 100% { opacity: 1; box-shadow: 0 0 4px #00e5ff; }
+            50% { opacity: 0.4; box-shadow: none; }
+        }
         .modal-mexc-btn {
             display: block;
             width: 100%;
@@ -568,6 +581,14 @@ MOBILE_DASHBOARD_HTML = '''
                 <div class="modal-item">
                     <div class="modal-item-val" id="mdScore" style="color:var(--blue)">0</div>
                     <div class="modal-item-lbl">Score</div>
+                </div>
+                <div class="modal-item">
+                    <div class="modal-item-val" id="mdEntry" style="color:var(--text-1)">--</div>
+                    <div class="modal-item-lbl">📍 Точка входа</div>
+                </div>
+                <div class="modal-item">
+                    <div class="modal-item-val" id="mdLive" style="color:var(--cyan, #00e5ff)"><span class="live-dot-sm"></span>--</div>
+                    <div class="modal-item-lbl">💹 Цена LIVE</div>
                 </div>
                 <div class="modal-item">
                     <div class="modal-item-val" id="mdRsi" style="color:var(--orange)">0</div>
@@ -744,12 +765,15 @@ MOBILE_DASHBOARD_HTML = '''
         const sym = (s.symbol || '').replace('_USDT','').replace('USDT','');
         const cls = `sig-card ${isShort ? 'short' : 'long'}${fresh ? ' fresh' : ''}`;
 
+        const entry = s.entry_price || 0;
+        const live = s.current_price || entry;
+        const fmtPrice = (p) => p >= 1 ? '$'+p.toFixed(4) : p >= 0.001 ? '$'+p.toFixed(6) : '$'+p.toFixed(8);
+
         return `<div class="${cls}" onclick="showSignalDetail(${idx})" style="cursor:pointer">
             <div class="sig-left">
                 <div class="sig-sym">${sym}</div>
                 <div class="sig-meta">
-                    <span>RSI ${(s.rsi||0).toFixed(0)}</span>
-                    <span>Vol ${(s.volume||0).toFixed(1)}x</span>
+                    <span>📍 ${entry > 0 ? fmtPrice(entry) : '--'}</span>
                     <span>${s.side || 'LONG'}</span>
                 </div>
             </div>
@@ -778,6 +802,17 @@ MOBILE_DASHBOARD_HTML = '''
         chEl.style.color = pct >= 0 ? 'var(--green)' : 'var(--red)';
 
         document.getElementById('mdScore').textContent = (s.score || 0) + '/100';
+
+        // Entry price
+        const entry = s.entry_price || 0;
+        const fmtP = (p) => p >= 1 ? '$'+p.toFixed(4) : p >= 0.001 ? '$'+p.toFixed(6) : '$'+p.toFixed(8);
+        document.getElementById('mdEntry').textContent = entry > 0 ? fmtP(entry) : '--';
+
+        // Live price
+        const live = s.current_price || entry;
+        const liveEl = document.getElementById('mdLive');
+        liveEl.innerHTML = live > 0 ? '<span class="live-dot-sm"></span>' + fmtP(live) : '--';
+
         document.getElementById('mdRsi').textContent = (s.rsi || 0).toFixed(1);
         document.getElementById('mdVol').textContent = (s.volume || 0).toFixed(1) + 'x';
 
@@ -1064,7 +1099,9 @@ class MobileDashboard:
         score: int,
         rsi: float,
         volume: float,
-        pnl: float = 0
+        pnl: float = 0,
+        entry_price: float = 0,
+        current_price: float = 0
     ):
         """Добавить сигнал"""
         signal = {
@@ -1075,6 +1112,8 @@ class MobileDashboard:
             'rsi': rsi,
             'volume': volume,
             'pnl': pnl,
+            'entry_price': entry_price,
+            'current_price': current_price,
             'time': datetime.now().isoformat()
         }
         
@@ -1085,6 +1124,17 @@ class MobileDashboard:
         
         # Instant broadcast to all WS clients
         asyncio.ensure_future(self._broadcast_ws())
+    
+    def update_signal_prices(self, prices: dict):
+        """Update live prices for active signals. prices = {symbol: current_price}"""
+        changed = False
+        for sig in self.data.get('signals', []):
+            sym = sig.get('symbol', '')
+            if sym in prices and prices[sym] > 0:
+                sig['current_price'] = prices[sym]
+                changed = True
+        if changed:
+            asyncio.ensure_future(self._broadcast_ws())
     
     def add_news(self, signal: str, title: str, source: str, time_ago: str, url: str = ''):
         """Добавить новость"""

@@ -391,7 +391,8 @@ class SystemOrchestrator:
         vol_mult = min(pump_signal.volume_usd / 1e6, 99.9) if pump_signal.volume_usd else 1
         self.mobile_dashboard.add_signal(
             symbol=symbol, side='LONG', change=pump_signal.price_change_pct,
-            score=pump_signal.score, rsi=rsi_val, volume=vol_mult, pnl=0
+            score=pump_signal.score, rsi=rsi_val, volume=vol_mult, pnl=0,
+            entry_price=pump_signal.price, current_price=pump_signal.price
         )
         
         # 🆕 Check Multi-Exchange Listings & Get Prices
@@ -511,8 +512,30 @@ class SystemOrchestrator:
 """
             await self.telegram.send_message(msg)
             
-            # Forward to Execution Engine (Long)
-            # Logic here handled by signal engine or direct execution
+            # AUTO DEMO TRADE: Place LONG order (news catalyst, NOT listing)
+            if pump_reason_type == "NEWS":
+                long_entry = pump_signal.price
+                long_sl = long_entry * 0.97     # -3% Stop Loss
+                long_tp1 = long_entry * 1.05    # +5% TP1
+                long_tp2 = long_entry * 1.10    # +10% TP2
+                
+                await self.auto_trader.place_long_order(
+                    symbol=symbol,
+                    entry_price=long_entry,
+                    stop_loss=long_sl,
+                    take_profit1=long_tp1,
+                    take_profit2=long_tp2,
+                    leverage=20,
+                    confidence=min(score, 100),
+                    signal_source="NEWS_LONG"
+                )
+                
+                # Update dashboard signal with entry price
+                for sig in self.mobile_dashboard.data.get('signals', []):
+                    if sig.get('symbol') == symbol and sig.get('side') == 'LONG':
+                        sig['entry_price'] = long_entry
+                        sig['current_price'] = long_entry
+                        break
             
         else:
             # No News? SHORT MODE 📉 (The "Pivot")
@@ -554,7 +577,8 @@ class SystemOrchestrator:
                  self.mobile_dashboard.add_signal(
                      symbol=symbol, side='SHORT', change=pump_signal.price_change_pct,
                      score=entry_obj.confidence if hasattr(entry_obj, 'confidence') else 80,
-                     rsi=rsi_val, volume=vol, pnl=0
+                     rsi=rsi_val, volume=vol, pnl=0,
+                     entry_price=entry_obj.entry_ideal, current_price=pump_signal.price
                  )
                  
                  # AUTO DEMO TRADE: Place short order
@@ -808,6 +832,20 @@ class SystemOrchestrator:
                         trades=len(at.order_history),
                         balance=at.demo_balance
                     )
+                    
+                    # Live price update for signal cards
+                    try:
+                        live_prices = {}
+                        for sig in self.mobile_dashboard.data.get('signals', [])[:20]:
+                            sym = sig.get('symbol', '')
+                            tracker = self.pump_detector.trackers.get(sym)
+                            if tracker and tracker.last_price > 0:
+                                live_prices[sym] = tracker.last_price
+                        if live_prices:
+                            self.mobile_dashboard.update_signal_prices(live_prices)
+                    except Exception:
+                        pass
+                    
                     await self.mobile_dashboard._broadcast_ws()
                     if not hasattr(self, '_demo_save_counter'):
                         self._demo_save_counter = 0

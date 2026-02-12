@@ -233,6 +233,68 @@ class AutoTrader:
         
         return order
     
+    async def place_long_order(
+        self,
+        symbol: str,
+        entry_price: float,
+        stop_loss: float,
+        take_profit1: float,
+        take_profit2: float = 0,
+        position_size_usd: float = 0,
+        leverage: int = 20,
+        confidence: int = 50,
+        signal_source: str = ""
+    ) -> Optional[AutoOrder]:
+        """Place LONG order — 5% deposit, 20x leverage"""
+        if len(self.positions) >= self.max_positions:
+            logger.debug(f"Position limit reached ({self.max_positions})")
+            return None
+        
+        if symbol in self.positions:
+            logger.debug(f"Position {symbol} already open")
+            return None
+        
+        leverage = self.DEFAULT_LEVERAGE
+        
+        margin = self.demo_balance * (self.POSITION_SIZE_PCT / 100)
+        if margin <= 0:
+            logger.debug(f"Insufficient balance for trade")
+            return None
+        notional = margin * leverage
+        quantity = notional / entry_price
+        
+        order = AutoOrder(
+            order_id=f"ORD_{symbol}_{int(time.time())}",
+            symbol=symbol,
+            side=PositionSide.LONG,
+            entry_price=entry_price,
+            quantity=quantity,
+            stop_loss=stop_loss,
+            take_profit1=take_profit1,
+            take_profit2=take_profit2 or take_profit1 * 1.05,
+            take_profit3=0,
+            created_at=datetime.now(),
+            signal_source=signal_source,
+            confidence=confidence,
+            leverage=leverage
+        )
+        
+        self.orders[order.order_id] = order
+        self.stats['orders_placed'] += 1
+        
+        if self.demo_mode:
+            await self._demo_fill_order(order, margin=margin)
+        else:
+            await self._place_real_order(order, leverage)
+        
+        logger.info(
+            f"📝 LONG {symbol} @ ${entry_price:.6f} | "
+            f"Margin ${margin:.2f} x{leverage} = ${notional:.2f} | "
+            f"SL: ${stop_loss:.6f} | TP1: ${take_profit1:.6f}"
+        )
+        
+        return order
+    
     async def _demo_fill_order(self, order: AutoOrder, price_history: List[float] = None, 
                                orderbook: dict = None, recent_trades: List[dict] = None,
                                margin: float = 0):
@@ -347,6 +409,30 @@ class AutoTrader:
             elif current_price <= order.take_profit2 and not position.tp2_filled and position.tp1_filled:
                 close_reason = "TAKE_PROFIT_2"
                 close_pct = 100  # Close ALL remaining
+                position.tp2_filled = True
+                logger.info(f"🎯 {position.symbol}: TP2! Closing remaining position")
+        
+        elif position.side == PositionSide.LONG:
+            # STOP LOSS — price dropped below SL
+            if current_price <= order.stop_loss:
+                close_reason = "STOP_LOSS"
+                close_pct = 100
+            
+            # TP1 — price rose above TP1, close 50%, move SL to breakeven
+            elif current_price >= order.take_profit1 and not position.tp1_filled:
+                close_reason = "TAKE_PROFIT_1"
+                close_pct = 50
+                position.tp1_filled = True
+                order.stop_loss = position.entry_price
+                if position.exit_plan:
+                    position.exit_plan.stop_loss.price = position.entry_price
+                    position.exit_plan.stop_loss.trigger_reason = "Breakeven after TP1"
+                logger.info(f"🎯 {position.symbol}: TP1! 50% closed, SL → breakeven ${position.entry_price:.6f}")
+            
+            # TP2 — close remaining 100%
+            elif current_price >= order.take_profit2 and not position.tp2_filled and position.tp1_filled:
+                close_reason = "TAKE_PROFIT_2"
+                close_pct = 100
                 position.tp2_filled = True
                 logger.info(f"🎯 {position.symbol}: TP2! Closing remaining position")
         
