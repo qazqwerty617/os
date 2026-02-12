@@ -469,6 +469,14 @@ class SystemOrchestrator:
 └ ❓ <b>Без факторов / No catalyst found</b>
 """
 
+        # 📊 Max Volume info
+        info = self.client.get_symbol_info(symbol)
+        max_notional_str = "Unknown"
+        max_notional_val = 0
+        if info:
+            max_notional_val = info.max_qty * info.contract_size * pump_signal.price
+            max_notional_str = f"${max_notional_val:,.0f}"
+
         # 🚨 IMMEDIATE PUMP ALERT
         instant_msg = f"""
 🚨 <b>PUMP DETECTED / ПАМП ОБНАРУЖЕН</b>
@@ -479,6 +487,7 @@ class SystemOrchestrator:
 💰 <b>Volume / Объём:</b> ${pump_signal.volume_usd:,.0f}
 💎 <b>Market Cap / Капитализация:</b> {mcap_str}
 📊 <b>Price / Цена:</b> ${pump_signal.price:.6f}
+⚠️ <b>Max Pos / Макс Поз:</b> {max_notional_str}
 {price_comparison}{pump_reason_block}
 🔍 <i>Analyzing entry... / Анализируем вход...</i>
 """
@@ -572,6 +581,11 @@ class SystemOrchestrator:
             
             if short_analysis and short_analysis.get('recommendation') == 'SHORT':
                  entry_obj = short_analysis.get('raw')
+                 
+                 # Add max volume info from orchestrator calc
+                 if hasattr(entry_obj, 'max_notional'):
+                     entry_obj.max_notional = max_notional_val
+                     
                  msg = entry_obj.format_telegram()
                  await self.telegram.send_message(msg)
                  

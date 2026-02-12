@@ -63,6 +63,7 @@ class ShortEntry:
     # Additional fields for Telegram formatting
     rsi: float = 0
     oi: float = 0
+    max_notional: float = 0
     reason: str = ""
     
     def format_telegram(self) -> str:
@@ -88,6 +89,8 @@ class ShortEntry:
 ├ 📊 Size: {self.position_size_pct:.0f}% of deposit
 ├ 💪 Leverage: {self.leverage_recommended}x
 └ 🎯 Confidence: {self.confidence}%
+
+⚠️ <b>MAX POSITION: ${self.max_notional:,.0f}</b>
 """.strip()
 
 

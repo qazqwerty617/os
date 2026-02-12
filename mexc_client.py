@@ -54,6 +54,7 @@ class SymbolInfo:
     min_qty: float
     max_qty: float
     tick_size: float
+    contract_size: float = 1.0
 
 
 class MEXCClient:
@@ -210,7 +211,8 @@ class MEXCClient:
                 quantity_precision=int(item.get('volScale', 2)),
                 min_qty=float(item.get('minVol', 1) or 1),
                 max_qty=float(item.get('maxVol', 100000) or 100000),
-                tick_size=float(item.get('priceUnit', 0.01) or 0.01)
+                tick_size=float(item.get('priceUnit', 0.01) or 0.01),
+                contract_size=float(item.get('contractSize', 1.0) or 1.0)
             )
             loaded += 1
         
