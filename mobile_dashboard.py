@@ -277,6 +277,7 @@ MOBILE_DASHBOARD_HTML = '''
         .sig-card:active { background: var(--glass-highlight); }
         .sig-card.long { border-left: 3px solid var(--green); }
         .sig-card.short { border-left: 3px solid var(--red); }
+        .sig-card.listing { border-left: 3px solid var(--blue); }
         .sig-left { flex: 1; }
         .sig-sym {
             font-size: 0.95rem; font-weight: 700;
@@ -288,9 +289,16 @@ MOBILE_DASHBOARD_HTML = '''
         }
         .sig-right {
             text-align: right;
+            display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
         }
+        .sig-pnl {
+            font-size: 0.85rem; font-weight: 800;
+            font-variant-numeric: tabular-nums;
+        }
+        .sig-pnl.up { color: var(--green); }
+        .sig-pnl.dn { color: var(--red); }
         .sig-change {
-            font-size: 0.95rem; font-weight: 700;
+            font-size: 0.75rem; font-weight: 700;
             margin-bottom: 2px;
         }
         .sig-change.up { color: var(--green); }
@@ -504,6 +512,7 @@ MOBILE_DASHBOARD_HTML = '''
         }
         .modal-side.long { background: var(--green-bg); color: var(--green); }
         .modal-side.short { background: var(--red-bg); color: var(--red); }
+        .modal-side.listing { background: var(--blue-bg); color: var(--blue); }
         .modal-grid {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
@@ -769,6 +778,15 @@ MOBILE_DASHBOARD_HTML = '''
         const live = s.current_price || entry;
         const fmtPrice = (p) => p >= 1 ? '$'+p.toFixed(4) : p >= 0.001 ? '$'+p.toFixed(6) : '$'+p.toFixed(8);
 
+        // PNL display
+        let pnlHtml = '';
+        if (s.pnl_pct !== undefined || s.pnl !== undefined) {
+            const p = s.pnl_pct || 0;
+            const u = s.pnl || 0;
+            const c = p >= 0 ? 'up' : 'dn';
+            pnlHtml = `<div class="sig-pnl ${c}">${u !== 0 ? '$'+u.toFixed(2) : ''} (${p >= 0 ? '+' : ''}${p.toFixed(1)}%)</div>`;
+        }
+
         return `<div class="${cls}" onclick="showSignalDetail(${idx})" style="cursor:pointer">
             <div class="sig-left">
                 <div class="sig-sym">${sym}</div>
@@ -778,6 +796,7 @@ MOBILE_DASHBOARD_HTML = '''
                 </div>
             </div>
             <div class="sig-right">
+                ${pnlHtml}
                 <div class="sig-change ${pct >= 0 ? 'up' : 'dn'}">${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%</div>
                 <span class="sig-score score-${sc}">${score}/100</span>
             </div>
@@ -1132,7 +1151,36 @@ class MobileDashboard:
             sym = sig.get('symbol', '')
             if sym in prices and prices[sym] > 0:
                 sig['current_price'] = prices[sym]
+                
+                # Update PNL if we have entry and side
+                entry = sig.get('entry_price', 0)
+                if entry > 0:
+                    side = sig.get('side', 'LONG')
+                    if side == 'SHORT':
+                        sig['pnl_pct'] = (entry - prices[sym]) / entry * 100
+                    elif side == 'LONG':
+                        sig['pnl_pct'] = (prices[sym] - entry) / entry * 100
+                    
                 changed = True
+        if changed:
+            asyncio.ensure_future(self._broadcast_ws())
+
+    def update_active_signals(self, positions: list):
+        """Sync actual trade PNL from AutoTrader positions to dashboard signals"""
+        changed = False
+        # Map symbol -> position
+        pos_map = {p.symbol: p for p in positions}
+        
+        for sig in self.data.get('signals', []):
+            sym = sig.get('symbol', '')
+            if sym in pos_map:
+                pos = pos_map[sym]
+                sig['pnl'] = pos.unrealized_pnl_usd
+                sig['pnl_pct'] = pos.unrealized_pnl_pct
+                sig['current_price'] = pos.current_price
+                sig['entry_price'] = pos.entry_price
+                changed = True
+        
         if changed:
             asyncio.ensure_future(self._broadcast_ws())
     

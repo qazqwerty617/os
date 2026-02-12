@@ -836,16 +836,32 @@ class SystemOrchestrator:
                         balance=at.demo_balance
                     )
                     
-                    # Live price update for signal cards
+                    # Live price update for signal cards — direct from MEXC API
                     try:
                         live_prices = {}
+                        active_symbols = set()
                         for sig in self.mobile_dashboard.data.get('signals', [])[:20]:
                             sym = sig.get('symbol', '')
-                            tracker = self.pump_detector.trackers.get(sym)
-                            if tracker and tracker.last_price > 0:
-                                live_prices[sym] = tracker.last_price
+                            if sym:
+                                active_symbols.add(sym)
+                        
+                        for sym in active_symbols:
+                            try:
+                                ticker = await self.client.get_ticker(sym)
+                                if ticker and ticker.price > 0:
+                                    live_prices[sym] = ticker.price
+                            except Exception:
+                                # Fallback to tracker
+                                tracker = self.pump_detector.trackers.get(sym)
+                                if tracker and tracker.last_price > 0:
+                                    live_prices[sym] = tracker.last_price
+                        
                         if live_prices:
                             self.mobile_dashboard.update_signal_prices(live_prices)
+                            # Also update auto_trader positions with fresh prices
+                            await self.auto_trader.update_positions(live_prices)
+                            # Sync active signals PNL/price back from positions
+                            self.mobile_dashboard.update_active_signals(self.auto_trader.get_open_positions())
                     except Exception:
                         pass
                     

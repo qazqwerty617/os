@@ -242,6 +242,27 @@ class MEXCClient:
             self.tickers[symbol] = ticker
         
         return tickers
+
+    async def get_ticker(self, symbol: str) -> Optional[Ticker]:
+        """Get single ticker - FUTURES API"""
+        endpoint = f'/api/v1/contract/ticker/{symbol}'
+        data = await self._request('GET', endpoint)
+        
+        if not data or 'data' not in data:
+            return self.tickers.get(symbol)
+        
+        item = data['data']
+        ticker = Ticker(
+            symbol=symbol,
+            price=float(item.get('lastPrice', 0) or 0),
+            volume_24h=float(item.get('volume24', 0) or 0),
+            change_24h_pct=float(item.get('riseFallRate', 0) or 0) * 100,
+            high_24h=float(item.get('high24Price', 0) or 0),
+            low_24h=float(item.get('low24Price', 0) or 0),
+            timestamp=int(item.get('timestamp', time.time() * 1000))
+        )
+        self.tickers[symbol] = ticker
+        return ticker
     
     async def get_klines(
         self,
