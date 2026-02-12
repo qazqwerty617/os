@@ -34,20 +34,26 @@ class OpenRouterAnalyzer:
         # Smart Tiering: High-performance free models
         self.top_models = [
             "meta-llama/llama-3.3-70b-instruct:free",
-            "meta-llama/llama-3.1-70b-instruct:free"
+            "google/gemini-2.0-flash-exp:free",
+            "qwen/qwen-3-coder:free",
+            "deepseek/deepseek-r1-distill-llama-70b:free"
         ]
         
         # Regular pool: Stable backup models
         self.regular_models = [
             "meta-llama/llama-3.1-8b-instruct:free",
-            "mistralai/mistral-7b-instruct:free",
+            "mistralai/mistral-7b-instruct-v0.1:free",
+            "microsoft/phi-3-mini-128k-instruct:free",
             "openrouter/free"
         ]
+        
+        # Dynamic tracking of working models for this session
+        self._broken_models = set()
         
         self.session = None
         self.enabled = len(self.api_keys) > 0
         if self.enabled:
-            logger.info(f"🚀 OpenRouter Analyzer initialized with {len(self.api_keys)} keys (Session-optimized)")
+            logger.info(f"🚀 OpenRouter Analyzer initialized with {len(self.api_keys)} keys (Dynamic Logic)")
         else:
             logger.warning("⚠️ OpenRouter disabled (no OPENROUTER_API_KEY)")
 
@@ -92,12 +98,14 @@ Return ONLY a JSON object:
         # 1. Try preferred models first
         preferred = self.top_models if high_impact else self.regular_models
         for model in preferred:
+            if model in self._broken_models: continue
             result = await self._make_request(prompt, model, system_prompt)
             if result: return result
             
         # 2. Global fallback to EVERYTHING else if preferred failed
         all_others = self.regular_models if high_impact else self.top_models
         for model in all_others:
+            if model in self._broken_models: continue
             result = await self._make_request(prompt, model, system_prompt)
             if result: return result
             
@@ -133,12 +141,14 @@ STRICT RULE: 'ru_title' MUST be in high-quality financial Russian.
         # 1. Try preferred tier
         preferred = self.top_models if high_impact else self.regular_models
         for model in preferred:
+            if model in self._broken_models: continue
             result = await self._make_request(prompt, model, system_prompt)
             if result: return result
             
         # 2. Global fallback to the other tier
         all_others = self.regular_models if high_impact else self.top_models
         for model in all_others:
+            if model in self._broken_models: continue
             result = await self._make_request(prompt, model, system_prompt)
             if result: return result
             
@@ -192,11 +202,20 @@ STRICT RULE: 'ru_title' MUST be in high-quality financial Russian.
                 elif resp.status == 401:
                     logger.error(f"❌ Invalid OpenRouter API Key")
                     self._rotate_key()
-                elif resp.status == 404:
-                    logger.error(f"❌ OpenRouter 404: Model {model} not found/available. Skipping.")
+                elif resp.status == 402:
+                    logger.warning(f"⚠️ OpenRouter 402 (Payment Required) for {model}. Check Balance/Verification.")
+                elif resp.status in [404, 400]:
+                    # Model bad or deprecated - mark as broken to stop wasting time
+                    # 400 with "not a valid model ID" is treated as 404
+                    error_text = await resp.text()
+                    if "model ID" in error_text or resp.status == 404:
+                        logger.error(f"❌ OpenRouter: Model {model} is invalid/deprecated. Disabling for session.")
+                        self._broken_models.add(model)
+                    else:
+                        logger.debug(f"OpenRouter status {resp.status} for {model}: {error_text[:100]}")
                 else:
                     error_text = await resp.text()
-                    logger.error(f"❌ OpenRouter API Error {resp.status} for {model}: {error_text[:100]}")
+                    logger.debug(f"OpenRouter status {resp.status} for {model}: {error_text[:100]}")
         except Exception as e:
             logger.error(f"💥 OpenRouter Fatal error ({model}): {str(e)[:100]}")
             
