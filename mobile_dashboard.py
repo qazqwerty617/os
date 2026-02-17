@@ -640,9 +640,9 @@ MOBILE_DASHBOARD_HTML = '''
         <!-- TAB: DASHBOARD -->
         <div id="tabDashboard" class="tab on">
             <div class="pnl-hero" id="pnlCard">
-                <div class="pnl-label">Сегодня P&L</div>
+                <div class="pnl-label">Общий P&L (DEMO)</div>
                 <div class="pnl-value" id="pnlValue">$0.00</div>
-                <div class="pnl-trades" id="pnlChange">0 сделок</div>
+                <div class="pnl-trades" id="pnlChange">0 сделок всего</div>
             </div>
 
             <div class="stat-grid">
@@ -797,7 +797,7 @@ MOBILE_DASHBOARD_HTML = '''
             </div>
             <div class="sig-right">
                 ${pnlHtml}
-                <div class="sig-change ${pct >= 0 ? 'up' : 'dn'}">${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%</div>
+                <div class="sig-change ${pct >= 0 ? 'up' : 'dn'}" style="font-size: 0.65rem; opacity: 0.8">Памп: ${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%</div>
                 <span class="sig-score score-${sc}">${score}/100</span>
             </div>
         </div>`;
@@ -899,7 +899,7 @@ MOBILE_DASHBOARD_HTML = '''
         const v = data.pnl.today;
         document.getElementById('pnlValue').textContent = `$${v >= 0 ? '+' : ''}${v.toFixed(2)}`;
         pnlCard.classList.toggle('negative', v < 0);
-        document.getElementById('pnlChange').textContent = `${data.pnl.trades} сделок сегодня`;
+        document.getElementById('pnlChange').textContent = `${data.pnl.trades} сделок завершено`;
 
         // Mini stats
         document.getElementById('statPumps').textContent = data.stats.pumps;
