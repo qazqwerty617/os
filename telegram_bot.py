@@ -6,7 +6,7 @@ Rich formatted alerts with signal details
 import asyncio
 import logging
 import aiohttp
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 from config import config
@@ -20,16 +20,17 @@ class TelegramNotifier:
     Sends formatted pump signals to chat
     """
     
-    def __init__(self):
+    def __init__(self, extra_chat_ids: List[str] = None):
         self.config = config.telegram
         self.enabled = False
         self.bot_token = self.config.bot_token
         self.chat_id = self.config.chat_id
+        self.extra_chat_ids = extra_chat_ids or []
         self._session: Optional[aiohttp.ClientSession] = None
         
         if self.bot_token and self.chat_id:
             self.enabled = True
-            logger.info(f"✅ Telegram notifier initialized (chat: {self.chat_id})")
+            logger.info(f"✅ Telegram notifier initialized (chat: {self.chat_id}, extra: {self.extra_chat_ids})")
         else:
             logger.warning("Telegram not configured - add TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to .env")
     
@@ -44,34 +45,39 @@ class TelegramNotifier:
             self._session = aiohttp.ClientSession(connector=connector)
         return self._session
     
+    async def _send_to_chat(self, chat_id: str, text: str, parse_mode: str = 'HTML') -> bool:
+        """Send message to a specific chat_id"""
+        try:
+            session = await self._get_session()
+            url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+            data = {'chat_id': chat_id, 'text': text, 'parse_mode': parse_mode}
+            async with session.post(url, json=data) as response:
+                result = await response.json()
+                if result.get('ok'):
+                    return True
+                else:
+                    logger.error(f"Telegram API error ({chat_id}): {result.get('description')}")
+                    return False
+        except Exception as e:
+            logger.error(f"Failed to send Telegram message to {chat_id}: {e}")
+            return False
+
     async def send_message(self, text: str, parse_mode: str = 'HTML') -> bool:
-        """Send message to configured chat"""
+        """Send message to main chat + all extra recipients"""
         if not self.enabled:
             logger.debug(f"TG disabled, would send: {text[:100]}...")
             return False
         
-        try:
-            session = await self._get_session()
-            url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
-            
-            data = {
-                'chat_id': self.chat_id,
-                'text': text,
-                'parse_mode': parse_mode
-            }
-            
-            async with session.post(url, json=data) as response:
-                result = await response.json()
-                
-                if result.get('ok'):
-                    return True
-                else:
-                    logger.error(f"Telegram API error: {result.get('description')}")
-                    return False
-                    
-        except Exception as e:
-            logger.error(f"Failed to send Telegram message: {e}")
-            return False
+        ok = await self._send_to_chat(self.chat_id, text, parse_mode)
+        
+        # Send to extra recipients
+        for extra_id in self.extra_chat_ids:
+            try:
+                await self._send_to_chat(extra_id, text, parse_mode)
+            except Exception as e:
+                logger.error(f"Failed to send to extra chat {extra_id}: {e}")
+        
+        return ok
     
     async def send_photo(
         self, 
@@ -97,23 +103,29 @@ class TelegramNotifier:
             session = await self._get_session()
             url = f"https://api.telegram.org/bot{self.bot_token}/sendPhoto"
             
-            import aiohttp
-            form = aiohttp.FormData()
-            form.add_field('chat_id', str(self.chat_id))
-            form.add_field('photo', photo_bytes, filename='chart.png', content_type='image/png')
-            if caption:
-                form.add_field('caption', caption)
-                form.add_field('parse_mode', parse_mode)
-            
-            async with session.post(url, data=form) as response:
-                result = await response.json()
-                
-                if result.get('ok'):
-                    logger.debug("Chart sent to Telegram")
-                    return True
-                else:
-                    logger.error(f"Telegram photo error: {result.get('description')}")
-                    return False
+            all_chat_ids = [self.chat_id] + self.extra_chat_ids
+            ok = False
+            for cid in all_chat_ids:
+                try:
+                    import aiohttp as _aiohttp
+                    form = _aiohttp.FormData()
+                    form.add_field('chat_id', str(cid))
+                    form.add_field('photo', photo_bytes, filename='chart.png', content_type='image/png')
+                    if caption:
+                        form.add_field('caption', caption)
+                        form.add_field('parse_mode', parse_mode)
+                    
+                    async with session.post(url, data=form) as response:
+                        result = await response.json()
+                        if result.get('ok'):
+                            logger.debug(f"Chart sent to {cid}")
+                            if cid == self.chat_id:
+                                ok = True
+                        else:
+                            logger.error(f"Telegram photo error ({cid}): {result.get('description')}")
+                except Exception as e:
+                    logger.error(f"Failed to send photo to {cid}: {e}")
+            return ok
                     
         except Exception as e:
             logger.error(f"Failed to send Telegram photo: {e}")

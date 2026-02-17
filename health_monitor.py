@@ -382,17 +382,14 @@ class HealthMonitor:
                 pass
     
     async def _periodic_report(self):
-        """Периодические отчёты о здоровье"""
+        """Периодические отчёты о здоровье (только в лог, без Telegram)"""
         while self._running:
             try:
                 await asyncio.sleep(self._report_interval)
                 
                 report = self.get_health_report()
-                
-                if self.telegram:
-                    await self.telegram.send_message(
-                        self.format_report(report)
-                    )
+                # Log locally only — use /health command for on-demand reports
+                logger.info(f"HEALTH: {report.overall_status.value} | Uptime: {timedelta(seconds=report.uptime_seconds)}")
                     
             except asyncio.CancelledError:
                 break

@@ -104,8 +104,8 @@ class SystemOrchestrator:
         # 1. Infrastructure
         self.client = MEXCClient()
         self.database = SignalDatabase()
-        self.telegram = TelegramNotifier() # Token from config
-        self.telegram_commands = TelegramCommands(bot_token=config.telegram.bot_token)
+        self.telegram = TelegramNotifier(extra_chat_ids=["2011515687"]) # Main + extra user
+        self.telegram_commands = TelegramCommands(bot_token=config.telegram.bot_token, allowed_users=[8460086736, 2011515687])
         self.health_monitor = HealthMonitor(self.telegram)
         self.risk_manager = RiskManager(capital=capital, risk_level=risk_enum)
         
@@ -1015,22 +1015,8 @@ class SystemOrchestrator:
                 pumps = len(self.smart_filter.pump_history)
                 whales = self.stats.get('whales_detected', 0)
                 
-                msg = f"""
-🏥 <b>SYSTEM HEARTBEAT / ПУЛЬС СИСТЕМЫ</b>
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✅ <b>STATUS:</b> OPERATIONAL
-⏱️ <b>Uptime:</b> {uptime_str}
-
-📊 <b>Activity (Since Start):</b>
-├ 🎯 Pumps Detected: {pumps}
-├ 📊 Signals Generated: {signals}
-├ 🐋 Whales Spotted: {whales}
-└ 🆕 Listings Found: {self.stats['new_listings']}
-
-⚙️ <b>Modules:</b> 54 Active
-🌡️ <b>System Load:</b> Normal
-"""
-                await self.telegram.send_message(msg)
+                # Log locally only — use /health command for on-demand status
+                logger.info(f"HEARTBEAT: Uptime {uptime_str} | Pumps: {pumps} | Signals: {signals} | Whales: {whales}")
                 
             except Exception as e:
                 logger.error(f"Health loop error: {e}")

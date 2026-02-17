@@ -31,19 +31,18 @@ class OpenRouterAnalyzer:
         self.current_key_index = 0
         self.base_url = "https://openrouter.ai/api/v1/chat/completions"
         
-        # Smart Tiering: High-performance free models
+        # Primary Tier: Prioritize Gemini for high quality (User request)
         self.top_models = [
+            "google/gemini-2.0-flash-lite:free",
+            "google/gemini-2.0-pro-exp-02-05:free", # Highest quality
             "meta-llama/llama-3.3-70b-instruct:free",
-            "google/gemini-2.0-flash-exp:free",
-            "qwen/qwen-3-coder:free",
-            "deepseek/deepseek-r1-distill-llama-70b:free"
+            "qwen/qwen3-4b:free"
         ]
         
-        # Regular pool: Stable backup models
+        # Regular pool: Fallbacks
         self.regular_models = [
-            "meta-llama/llama-3.1-8b-instruct:free",
-            "mistralai/mistral-7b-instruct-v0.1:free",
-            "microsoft/phi-3-mini-128k-instruct:free",
+            "google/gemini-2.0-flash-lite:free", # Redundancy
+            "openai/gpt-4o-mini", # Stable if they have balance
             "openrouter/free"
         ]
         
