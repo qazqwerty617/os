@@ -1168,8 +1168,10 @@ class MobileDashboard:
             'rsi': rsi,
             'volume': volume,
             'pnl': pnl,
+            'pnl_pct': 0,
             'entry_price': entry_price,
             'current_price': current_price,
+            'leverage': 20,
             'time': datetime.now().isoformat()
         }
         
@@ -1206,41 +1208,76 @@ class MobileDashboard:
             logger.info(f"📱 Signal closed and archived: {symbol} (${pnl_usd:+.2f})")
     
     def update_signal_prices(self, prices: dict):
-        """Update live prices for active signals. prices = {symbol: current_price}"""
+        """Update live prices for active signals with leveraged PnL."""
         changed = False
         for sig in self.data.get('signals', []):
             sym = sig.get('symbol', '')
             if sym in prices and prices[sym] > 0:
                 sig['current_price'] = prices[sym]
                 
-                # Update PNL if we have entry and side
+                # Calculate leveraged PnL if we have entry and side
                 entry = sig.get('entry_price', 0)
                 if entry > 0:
                     side = sig.get('side', 'LONG')
+                    leverage = sig.get('leverage', 20)
+                    
+                    # Raw price change %
                     if side == 'SHORT':
-                        sig['pnl_pct'] = (entry - prices[sym]) / entry * 100
-                    elif side == 'LONG':
-                        sig['pnl_pct'] = (prices[sym] - entry) / entry * 100
+                        raw_pct = (entry - prices[sym]) / entry * 100
+                    else:
+                        raw_pct = (prices[sym] - entry) / entry * 100
+                    
+                    # Leveraged PnL %
+                    sig['pnl_pct'] = raw_pct * leverage
+                    
+                    # PnL in USD (margin * leveraged_pct / 100)
+                    # margin = 5% of $100 = $5 (approx)
+                    margin = 5.0  # Default margin per trade
+                    sig['pnl'] = margin * (raw_pct * leverage) / 100
                     
                 changed = True
         if changed:
             asyncio.ensure_future(self._broadcast_ws())
 
     def update_active_signals(self, positions: list):
-        """Sync actual trade PNL from AutoTrader positions to dashboard signals"""
+        """Sync actual trade PNL from AutoTrader positions to dashboard signals.
+        Also cleans up stale signals that have no matching position."""
         changed = False
         # Map symbol -> position
         pos_map = {p.symbol: p for p in positions}
         
+        # Update signals with real position data
         for sig in self.data.get('signals', []):
             sym = sig.get('symbol', '')
             if sym in pos_map:
                 pos = pos_map[sym]
-                sig['pnl'] = pos.unrealized_pnl_usd
-                sig['pnl_pct'] = pos.unrealized_pnl_pct
+                leverage = pos.leverage or 20
+                sig['leverage'] = leverage
+                sig['pnl_pct'] = pos.unrealized_pnl_pct * leverage  # Leveraged %
+                sig['pnl'] = pos.unrealized_pnl_usd  # Already in USD
                 sig['current_price'] = pos.current_price
                 sig['entry_price'] = pos.entry_price
+                sig['side'] = pos.side.value if hasattr(pos.side, 'value') else str(pos.side)
                 changed = True
+        
+        # Remove stale signals (no position, older than 3 minutes)
+        now = datetime.now()
+        stale = []
+        for i, sig in enumerate(self.data.get('signals', [])):
+            sym = sig.get('symbol', '')
+            if sym not in pos_map and sig.get('side') != 'LISTING':
+                try:
+                    sig_time = datetime.fromisoformat(sig.get('time', ''))
+                    age_min = (now - sig_time).total_seconds() / 60
+                    if age_min > 3:
+                        stale.append(i)
+                except:
+                    stale.append(i)
+        
+        for i in reversed(stale):
+            removed = self.data['signals'].pop(i)
+            logger.debug(f"Cleaned stale signal: {removed.get('symbol')}")
+            changed = True
         
         if changed:
             asyncio.ensure_future(self._broadcast_ws())

@@ -705,7 +705,11 @@ class SystemOrchestrator:
         await broadcast_signal(signal)
         
         # Mobile dashboard: add enhanced signal
-        side = 'SHORT' if 'SHORT' in (signal.quality.value or '') else 'LONG'
+        side = getattr(signal, 'side', None)
+        if not side:
+            side = 'SHORT' if 'SHORT' in (signal.quality.value or '') else 'LONG'
+        if hasattr(side, 'value'):
+            side = side.value
         self.mobile_dashboard.add_signal(
             symbol=signal.symbol, side=side,
             change=signal.price_change_pct if hasattr(signal, 'price_change_pct') else 0,
@@ -909,6 +913,27 @@ class SystemOrchestrator:
                             await self.auto_trader.update_positions(live_prices)
                             # Sync active signals PNL/price back from positions
                             self.mobile_dashboard.update_active_signals(self.auto_trader.get_open_positions())
+                            
+                            # Sync dashboard stats (balance, winrate, etc.)
+                            wins = self.auto_trader.stats.get('wins', 0)
+                            losses = self.auto_trader.stats.get('losses', 0)
+                            total = wins + losses
+                            winrate = (wins / total * 100) if total > 0 else 0
+                            profit_factor = (wins / losses) if losses > 0 else (wins if wins > 0 else 0)
+                            self.mobile_dashboard.update_stats(
+                                balance=self.auto_trader.demo_balance,
+                                wins=wins,
+                                losses=losses,
+                                total_trades=self.auto_trader.stats.get('orders_filled', 0),
+                                winrate=round(winrate, 1),
+                                profit_factor=round(profit_factor, 2)
+                            )
+                            self.mobile_dashboard.update_pnl(
+                                today=self.auto_trader.demo_pnl,
+                                all_time=self.auto_trader.stats.get('total_pnl_usd', 0),
+                                trades=self.auto_trader.stats.get('orders_filled', 0),
+                                balance=self.auto_trader.demo_balance
+                            )
                     except Exception:
                         pass
                     
