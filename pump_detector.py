@@ -441,7 +441,7 @@ class PumpDetector:
         volume_usd = ticker.volume_24h * ticker.price if ticker else 0
         
         # MINIMUM VOLUME FILTER - skip garbage pumps
-        MIN_PUMP_VOLUME_USD = 1000  # Skip pumps with < $1000 volume
+        MIN_PUMP_VOLUME_USD = 5000  # Skip pumps with < $5000 volume
         if volume_usd < MIN_PUMP_VOLUME_USD:
             return  # Skip low-volume garbage
         
